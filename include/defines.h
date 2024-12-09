@@ -2,11 +2,8 @@
 *
 */
 
-
-
-
-
-
+#define pMBB32powerOn 0xFF;
+#define pMBB32powerOff 0;
 
 EthernetServer server(80);
 EthernetUDP udpServer;

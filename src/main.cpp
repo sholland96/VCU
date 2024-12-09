@@ -87,10 +87,10 @@ void setup() {
   can1.write(PDUmsg2);
 
   t1.begin(callback_cells_pdu, 62.5ms);//62.5ms);
-  delay(200);
+  delay(250);
   wakepMBB32();
   t2.begin(callback_cell_sample, 100ms);
-  t3.begin(callback500ms, 1000ms);
+  t3.begin(callback500ms, 500ms);
   //delay(100);
   //threads.addThread(thread_cells_pdu);
   
@@ -126,9 +126,8 @@ void loop() {
   SendCANFramesToEth(client);
 
   myGNSS.checkUblox(); //See if new data is available. Process bytes as they come in.
-
-  groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;//convert mm/s to mph
-  GPSaltitude = myGNSS.getAltitudeMSL() / 3300;//feet
+  //groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;//convert mm/s to mph
+  //GPSaltitude = myGNSS.getAltitudeMSL() / 3300;//feet
   //Serial.print("Altitude ");
   //Serial.print(myGNSS.getAltitudeMSL() / 3300, DEC); Serial.println(" feet");
   //Serial.print("Speed ");
@@ -147,7 +146,7 @@ void callback_cell_sample() {
   msg1.id = 0xFF0000;
   msg1.len = 0;
   can1.write(msg1);  //send sample command every 1 second
-  //delay(5);
+  delay(5);
   //check min/max cell voltages on each pMBB32 every 3 t2 periods
   if (counter == 1) {
     msg1.id = 0xCF0100;
@@ -167,29 +166,29 @@ void callback_cell_sample() {
   }
   counter++;
   //delay(2);
-/*  
-  if(PDUmsg.buf[1] == pMBB32powerOff){
-    PDUmsg.buf[1] = pMBB32powerOn;
-    can1.write(PDUmsg);
+ 
+  if(!PDUmsg1.buf[1]) {
+    PDUmsg1.buf[1] = pMBB32powerOn;
+    can1.write(PDUmsg1);
     delay(100);
     wakepMBB32();
-  }*/
-//  else{
+  }
+  else {
     
-/*    
+    
     //check for stale pMBB32 CAN and restart if necessary
     if((pMBB32stale1 > 50)|(pMBB32stale2 > 50)|(pMBB32stale3 > 50)){
-      PDUmsg.buf[1] = pMBB32powerOff;
-      can1.write(PDUmsg);
+      PDUmsg1.buf[1] = pMBB32powerOff;
+      can1.write(PDUmsg1);
       pMBB32stale1 = 0;
       pMBB32stale2 = 0;
       pMBB32stale3 = 0;
       delay(200);
       
-    }*/
-//  } 
+    }
+  } 
   
-/*  if(pMBB32stale1 > 5){
+  if(pMBB32stale1 > 5){
     //send wakeup to pMBB32 #1
     msg1.id = 0xAF0100; 
     msg1.len = 3;
@@ -218,7 +217,7 @@ void callback_cell_sample() {
     msg1.buf[2] = 0x2;
     can1.write(msg1);
     delay(5);
-  }*/
+  }
 
   displayStatus();//update RealDash
 
@@ -229,7 +228,8 @@ void callback500ms() {
   //ReadDigitalStatuses();
   //ReadAnalogStatuses();
   //SendCANFramesToEth();
-  
+  //groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;//convert mm/s to mph
+  //GPSaltitude = myGNSS.getAltitudeMSL() / 3300;//feet
   digitalToggleFast(LED_BUILTIN);
 }//end of callback5000ms()
 
