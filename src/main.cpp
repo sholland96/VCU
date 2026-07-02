@@ -1,32 +1,11 @@
 #include <Arduino.h>
-//#include <i2c_driver_wire.h> //Needed for I2C to GNSS
 #include <TeensyTimerTool.h>
 #include <FlexCAN_T4.h>
+#include <LIN_master_HardwareSerial.h>  // LIN master on Serial3 (RX3=pin7, TX3=pin8)
 #include "pMBB32.h"
-#include <NativeEthernet.h>
-//#include <Snooze.h>
 #include "defines.h"
-#include <SparkFun_u-blox_GNSS_Arduino_Library.h> //Click here to get the library: http://librarymanager/All#SparkFun_u-blox_GNSS
-
-#include <SPI.h>
-#include <ST7735_t3.h> // Hardware-specific library
-#include <ST7789_t3.h> // Hardware-specific library
-#include <ST7735_t3_font_Arial.h>
-//#include <ST7735_t3_font_ArialBold.h>
-
-#define TFT_RST    32   // chip reset
-#define TFT_DC     9   // tells the display if you're sending data (D) or commands (C)   --> WR pin on TFT
-#define TFT_MOSI   11  // Data out    (SPI standard)
-#define TFT_SCLK   13  // Clock out   (SPI standard)
-#define TFT_CS     10  // chip select (SPI standard)
-
-int LCD_BL = 33;       // LCD back light control
-
-//#define debug_loop_timing
-
-ST7789_t3 tft = ST7789_t3(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-
-//SFE_UBLOX_GNSS myGNSS;
+#include "Fsm.h"
+//#include <Snooze.h>
 
 //SnoozeDigital digital;
 //SnoozeTimer timer;
@@ -36,11 +15,11 @@ ST7789_t3 tft = ST7789_t3(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 using namespace TeensyTimerTool;
 PeriodicTimer t1(RTC); // generate a timer from the pool (Pool: 2xGPT, 16xTMR(QUAD), 20xTCK)
 PeriodicTimer t2(GPT1); // generate a timer from the pool (Pool: 2xGPT, 16xTMR(QUAD), 20xTCK)
-//PeriodicTimer t3(GPT2); // generate a timer from the pool (Pool: 2xGPT, 16xTMR(QUAD), 20xTCK)
+PeriodicTimer t3(GPT2); // generate a timer from the pool (Pool: 2xGPT, 16xTMR(QUAD), 20xTCK)
 
-FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can1;// pMMB32, PDU-8, keypad, EVCC
-FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_16> can2;// Sendyne, IVT-S  
-FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> can3;// RealDash 
+FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can1;// 500KHz - pMMB32, PDU-8  
+FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_16> can2;// 500KHz - LDU, EVCC, SIM100MOD, IVT-MOD, EMP W29, keypad
+FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> can3;// 1Mhz - Wireless Gateway, RealDash 
 
 CAN_message_t msg1;//.buf[7] = {0x0D, 0x05, 0x05, 0x0D, 0, 0, 0, 0};
 CAN_message_t msg2;
@@ -48,35 +27,47 @@ CAN_message_t msg3;
 CAN_message_t PDUmsg1;
 CAN_message_t PDUmsg2;
 
+// Used pins
+#define LED_PIN 13
+#define KL15_PIN 2
 
+//Events
+#define KL15_ON 1
+#define KL15_OFF 2
+#define KL17_ON 1
+#define KL17_OFF 2
+#define DRIVE_ON 1
+#define DRIVE_OFF 2
+#define CHARGE_ON 1
+#define CHARGE_OFF 2
 
-void callback_cells_pdu() {
-  //send PDU-8 driver settings every t1 period
+VCUStateEnum VCUstate = VCU_STATE_OFF;
+State state_Off(&Off_enter, &check_KL15, &Off_exit);
+State state_Idle(&Idle_enter, &check_KL15, &Idle_exit);
+State state_Drive(&Drive_enter, &check_Drive, &Idle_exit);
+State state_Charge(&Charge_enter, &check_Drive, &Idle_exit);
+Fsm fsm(&state_Off);
+
+/* t1 Callback
+* This runs every 62.5ms. 
+* Tasks performed here:
+*   1. Send PDU-8 driver settings every t1 period
+*   2. Request min/max cells from pMBB32s
+*   3. Update RealDash
+*/
+void callback_t1() {//send PDU-8 driver settings every t1 period
+  //send PDU-8 driver settings every t1 period (125ms)
   can1.write(PDUmsg1);
-}//end of callback_cells_pdu()
-
-void callback_cell_sample() {
-  /*  This runs every t2 period (150ms) 
-  *   1. Request all cell and temperature measurements from pMBB32s
-  *   2. Request min/max cell voltages from pMBB32s
-  *   3. Check for stale pMBB32 CAN and restart if necessary
-  *   4. Update RealDash
-  *   5. Read isolation state from SIM100MOD
-  *   6. Update RealDash
-  */
-  callback_cell_sample_start = millis();
-  // request all cell and temperature measurements every t2 period
-  msg1.id = 0xFF0000;
-  msg1.len = 0;
-  can1.write(msg1);  //send sample command every 1 second
-  delay(20);
-  //check min/max cell voltages on each pMBB32 every 3 t2 periods
+  delay(1);
+  //can1.write(PDUmsg2);
+  //delay(1);
+  msg1.flags.extended = 1;
   switch (counter) {
     case 1: 
       msg1.id = 0xCF0100;//request min/max cells
       msg1.len = 0;
       can1.write(msg1);
-      delay(20);
+      delay(1);
       msg1.id = 0xAF0100; 
       msg1.len = 3;
       msg1.buf[0] = 0x01;
@@ -88,7 +79,7 @@ void callback_cell_sample() {
       msg1.id = 0xCF0200;//request min/max cells
       msg1.len = 0;
       can1.write(msg1);
-      delay(20);
+      delay(1);
       msg1.id = 0xAF0200; 
       msg1.len = 3;
       msg1.buf[0] = 0x01;
@@ -101,7 +92,7 @@ void callback_cell_sample() {
       msg1.id = 0xCF0300;//request min/max cells
       msg1.len = 0;
       can1.write(msg1);
-      delay(20);
+      delay(1);
       msg1.id = 0xAF0300; 
       msg1.len = 3;
       msg1.buf[0] = 0x01;
@@ -111,7 +102,44 @@ void callback_cell_sample() {
       break;
   }
   counter++;
-  delay(20);
+  delay(1);
+  if (VCUstate == VCU_STATE_IDLE || VCUstate == VCU_STATE_DRIVE)
+    displayStatus();//update RealDash
+}//end of callback_cells_pdu()
+
+/* t2 Callback
+* This runs every t2 period (200ms).
+* Tasks performed here:
+*   1. Request all cell and temperature measurements from pMBB32s
+*   2. Request min/max cell voltages from pMBB32s
+*   3. Check for stale pMBB32 CAN and restart if necessary
+*   4. Read isolation state from SIM100MOD
+*/
+void callback_t2() {
+#ifdef debug_loop_timing
+  callback_cell_sample_start = millis();
+#endif
+  // request all cell and temperature measurements every t2 period
+  msg1.id = 0xFF0000;
+  msg1.flags.extended = 1;
+  msg1.len = 0;
+  can1.write(msg1);  //send sample command every 1 second
+  delay(1);
+  // Invalidate data from any pMBB32 that has not responded within 200ms
+  {
+    uint32_t now = millis();
+    if (now - lastUpdatePMBB1 > 200) { minCellV1 = 0xFFFF; maxCellV1 = 0; }
+    if (now - lastUpdatePMBB2 > 200) { minCellV2 = 0xFFFF; maxCellV2 = 0; }
+    if (now - lastUpdatePMBB3 > 200) { minCellV3 = 0xFFFF; maxCellV3 = 0; }
+    lowestCellV  = std::min({minCellV1, minCellV2, minCellV3});
+    highestCellV = std::max({maxCellV1, maxCellV2, maxCellV3});
+  }
+  // Increment stale counters every t2 period; reset in can1Sniff() on valid response
+  pMBB32stale1++;
+  pMBB32stale2++;
+  pMBB32stale3++;
+  //check min/max cell voltages on each pMBB32 every 3 t2 periods
+  
 /* 
   if(PDUmsg2.buf[1] = pMBB32powerOff) { 
     PDUmsg2.buf[1] = pMBB32powerOn;
@@ -177,34 +205,29 @@ void callback_cell_sample() {
   msg2.len = 1;
   msg2.buf[0] = 0xE0;//request isolation state
   can2.write(msg2);
-  delay(1); 
-  msg2.id = 0xA100101;//send SIM100MOD Request Isolation Resistances command
-  msg2.len = 1;
+  delay(2); 
+  /*
   msg2.buf[0] = 0xE1;//request isolation resistances
   can2.write(msg2);
-  delay(1);
-  msg2.id = 0xA100101;//send SIM100MOD Request Isolation Capacitances command
-  msg2.len = 1;
+  delay(2);
   msg2.buf[0] = 0xE2;//request isolation capacitances
   can2.write(msg2);
-  delay(1);
-  msg2.id = 0xA100101;//send SIM100MOD Request Voltages Vp and Vn command
-  msg2.len = 1;
+  delay(2);
   msg2.buf[0] = 0xE3;//request Vp and Vn voltages
   can2.write(msg2);
-  delay(1);
-  msg2.id = 0xA100101;//send SIM100MOD Request Battery Voltage command
-  msg2.len = 1;
+  delay(2);
   msg2.buf[0] = 0xE4;//request battery voltage
   can2.write(msg2);
-  delay(1);
-  msg2.id = 0xA100101;//send SIM100MOD Request Error Flags command
-  msg2.len = 1;
-  msg2.buf[0] = 0xE5;//request isolation resistances
+  delay(2);
+  msg2.buf[0] = 0xE5;//request error flags
+  can2.write(msg2);
+  delay(2); */
+  msg2.buf[0] = 0x80;//request temperature
   can2.write(msg2);
   delay(1);
-  
-  displayStatus();//update RealDash
+
+  linReadValve();//poll BMW changeover valve over LIN (Serial3)
+
   //SendCANFramesToEth(connectedClient);
 #ifdef debug_loop_timing
   //callback_cell_sample_finish = millis() - callback_cell_sample_start;
@@ -223,14 +246,20 @@ void callback_cell_sample() {
 #endif
 }//end of callback_cell_sample()
 
-void callback1000ms() {
+/* t3 Callback
+* This runs every 1000ms. 
+*/
+void callback_t3() {
   //ReadDigitalStatuses();
   //ReadAnalogStatuses();
   //groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;//convert mm/s to mph
   //GPSaltitude = myGNSS.getAltitudeMSL() / 3300;//feet
-  //digitalToggleFast(LED_BUILTIN);
+#ifndef TFT240_240_display
+  digitalToggleFast(LED_BUILTIN);
+#endif
 }//end of callback1000ms()
 
+#ifdef TCP_Interface
 void teensyMAC(uint8_t *mac) {
     for(uint8_t by=0; by<2; by++) mac[by]=(HW_OCOTP_MAC1 >> ((1-by)*8)) & 0xFF;
     for(uint8_t by=0; by<4; by++) mac[by+2]=(HW_OCOTP_MAC0 >> ((3-by)*8)) & 0xFF;
@@ -243,33 +272,38 @@ void startEthernet() {
     server.begin();
     //udpServer.begin(targetPort);
 }
-
+#endif
+/* CAN1 Receiver
+* This function processes messages received on CAN1.
+*   The pMBB32s are configured to broadcast cell voltages and temperatures at 100ms rate.
+*/
 void can1Sniff(const CAN_message_t &msg) {
-  digitalWriteFast(3, HIGH);
+  digitalWriteFast(4, HIGH);
+
   if ((msg.id & 0x00000F00) == 0x00000E00) {//received 0x18FF0Eyy    
-    switch (msg.id & 0x0000000F) {
-      case 1:
+    switch (msg.id) {
+      case 0x18FF0E01:
         minCellV1 = (msg.buf[minCellHighByte]*256) + msg.buf[minCellLowByte];
         minCell1 = msg.buf[0];
         maxCellV1 = (msg.buf[maxCellHighByte]*256) + msg.buf[maxCellLowByte];
         maxCell1 = msg.buf[1];
+        lastUpdatePMBB1 = millis();
         break;
-      case 2:
+      case 0x18FF0E02:
         minCellV2 = (msg.buf[minCellHighByte]*256) + msg.buf[minCellLowByte];
         minCell2 = msg.buf[0];
         maxCellV2 = (msg.buf[maxCellHighByte]*256) + msg.buf[maxCellLowByte];
         maxCell2 = msg.buf[1];
+        lastUpdatePMBB2 = millis();
         break;
-      case 3:
+      case 0x18FF0E03:
         minCellV3 = (msg.buf[minCellHighByte]*256) + msg.buf[minCellLowByte];
         minCell3 = msg.buf[0];
         maxCellV3 = (msg.buf[maxCellHighByte]*256) + msg.buf[maxCellLowByte];
         maxCell3 = msg.buf[1];
-        break;
-      default:
+        lastUpdatePMBB3 = millis();
         break;
     }
-
     // Calculate the lowest of minCellV1, minCellV2, and minCellV3
     lowestCellV = std::min({minCellV1, minCellV2, minCellV3});
     if(lowestCellV == minCellV1) {
@@ -344,125 +378,215 @@ void can1Sniff(const CAN_message_t &msg) {
     } */
   }//end 0x18FF0Eyy receiver
 
-  // check for stale pMBB32 measurements requests. We should see a response to FF command regularly
-  if (msg.id & 0x18FF0E00) {//(msg.id & 0x00000F00) == 0x00000E00
+  // Reset stale counter for whichever pMBB32 just responded
+  if ((msg.id & 0x00000F00) == 0x00000E00) {
     switch (msg.id & 0x0000000F) {
-        case 1:
-            pMBB32stale1 = 0;
-            pMBB32stale2++;
-            pMBB32stale3++;
-            break;
-        case 2:
-            pMBB32stale1++;
-            pMBB32stale2 = 0;
-            pMBB32stale3++;
-            break;
-        case 3:
-            pMBB32stale1++;
-            pMBB32stale2++;
-            pMBB32stale3 = 0;
-            break;
-        default:
-            break;
+      case 1: pMBB32stale1 = 0; break;
+      case 2: pMBB32stale2 = 0; break;
+      case 3: pMBB32stale3 = 0; break;
+      default: break;
     }
-  } else {
-      pMBB32stale1++;
-      pMBB32stale2++;
-      pMBB32stale3++;
   }
 
-  
-  digitalWriteFast(3, LOW);
+//  switch (msg.id) {
+    
+//  }
+
+  digitalWriteFast(4, LOW);
 }// end of can1Sniff(const CAN_message_t &msg)
 
+/* CAN2 Receiver
+* This function processes messages received on CAN2.
+* 
+* The IVT-MOD is configured by us for the following broadcast rates:
+*   0x621: Current - 20ms
+*   0x622: Pack+(U1) - 60ms
+*   0x623: Pre-charge+(U2) - 60ms
+*   0x624: U3 - 60ms
+*   0x625: Temperature - 200ms
+*   0x626: Power - 30ms
+*   0x627: Coulomb Count (As) - 30ms
+*   0x628: Energy (Wh) - 30ms
+*
+*   The keypad automatically broadcasts status at 100ms rate.
+* 
+*   The SIM100MOD broadcasts isolation state at 100ms rate.
+*/
 void can2Sniff(const CAN_message_t &msg) {
-  digitalWriteFast(4, HIGH);
-  switch (msg.id) {
-    case 0x521:
-      IVTpackCurrent = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+  digitalWriteFast(5, HIGH);
+  switch (msg.id) {  
+    case 0x621://IVT-MOD Current Sensor
+      IVTpackCurrent = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x522:
-      IVTpackVoltage = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+    case 0x622:
+      IVTpackVoltage = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x523:
-      IVTpreChargeV = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+    case 0x623:
+      IVTpreChargeV = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x524:
-      IVTvoltage3 = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+    case 0x624:
+      IVTvoltage3 = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x525:
-      IVTtemp = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+    case 0x625:
+      IVTtemp = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x526:
-      IVTpower = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+    case 0x626:
+      IVTpower = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x527:
-      IVTcoulombCounter = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+    case 0x627:
+      IVTcoulombCounter = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x528:
-      IVTenergyCounter = msg.buf[2]<<24 & msg.buf[3]<<16 & msg.buf[4]<<8 & msg.buf[5];
+    case 0x628:
+      IVTenergyCounter = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x18EFFF21:
-      //Serial.print(msg.buf[msg.buf[4]] < 16 ? "0" : ""); Serial.println(msg.buf[4], HEX);
+    case 0x18EFFF21://CAN keypad
       if(msg.buf[2] == 0xF9){
         switch (msg.buf[4]) {
           case 0:
             //
             break;
           case 0x01://Park button pressed            
-            if((keypadStatus & 0x01) == 1){
-              bitClear(keypadStatus, 0);
-            }else{          
-              bitSet(keypadStatus, 0);
+            new_0x01_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x01_state != last_0x01_state) {
+              // reset the debouncing timer
+              last_0x01_time = millis();
+            }
+            if ((millis() - last_0x01_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x01_state != button_0x01_state) {
+                button_0x01_state = new_0x01_state;
+                Serial.println("BTN: Park");
+              }
             }            
             break;
           case 0x02://Reverse button pressed
-            if((keypadStatus & 0x02) == 1){
-              bitClear(keypadStatus, 1);
-            }else{          
-              bitSet(keypadStatus, 1);
+            new_0x02_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x02_state != last_0x02_state) {
+              // reset the debouncing timer
+              last_0x02_time = millis();
+            }
+            if ((millis() - last_0x02_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x02_state != button_0x02_state) {
+                button_0x02_state = new_0x02_state;
+                Serial.println("BTN: Reverse");
+              }
             }            
             break;
           case 0x04://Neutral button pressed
-            if((keypadStatus & 0x03) == 1){
-              bitClear(keypadStatus, 2);
-            }else{          
-              bitSet(keypadStatus, 2);
-            }            
+            new_0x04_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x04_state != last_0x04_state) {
+              // reset the debouncing timer
+              last_0x04_time = millis();
+            }
+            if ((millis() - last_0x04_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x04_state != button_0x04_state) {
+                button_0x04_state = new_0x04_state;
+                Serial.println("BTN: Neutral");
+              }
+            }           
             break;
           case 0x08://Drive button pressed
-            if((keypadStatus & 0x04) == 1){
-              bitClear(keypadStatus, 3);
-            }else{          
-              bitSet(keypadStatus, 3);
-            }            
+            new_0x08_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x08_state != last_0x08_state) {
+              // reset the debouncing timer
+              last_0x08_time = millis();
+            }
+            if ((millis() - last_0x08_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x08_state != button_0x08_state) {
+                button_0x08_state = new_0x08_state;
+                Serial.println("BTN: Drive");
+              }
+            }              
             break;
           case 0x10://Ignition button pressed
-            if((keypadStatus & 0x05) == 1){
-              bitClear(keypadStatus, 4);
-            }else{          
-              bitSet(keypadStatus, 4);
-            }            
+            new_0x10_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x10_state != last_0x10_state) {
+              // reset the debouncing timer
+              last_0x10_time = millis();
+            }
+            if ((millis() - last_0x10_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x10_state != button_0x10_state) {
+                button_0x10_state = new_0x10_state;
+                Serial.println("BTN: Ignition");
+              }
+            }        
             break;
           case 0x20://Speed mode button pressed
-            if((keypadStatus & 0x06) == 1){
-              bitClear(keypadStatus, 5);
-            }else{          
-              bitSet(keypadStatus, 5);
+            new_0x20_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x20_state != last_0x20_state) {
+              // reset the debouncing timer
+              last_0x20_time = millis();
+            }
+            if ((millis() - last_0x20_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x20_state != button_0x20_state) {
+                button_0x20_state = new_0x20_state;
+                Serial.println("BTN: Speed Mode");
+              }
             }            
             break;
           case 0x40://AUX button pressed
-            if((keypadStatus & 0x07) == 1){
-              bitClear(keypadStatus, 6);
-            }else{          
-              bitSet(keypadStatus, 6);
+            new_0x40_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x40_state != last_0x40_state) {
+              // reset the debouncing timer
+              last_0x40_time = millis();
+            }
+            if ((millis() - last_0x40_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x40_state != button_0x40_state) {
+                button_0x40_state = new_0x40_state;
+                Serial.println("BTN: AUX");
+              }
             }            
             break;
           case 0x80://Drive mode button pressed
-            if((keypadStatus & 0x08) == 1){
-              bitClear(keypadStatus, 7);
-            }else{          
-              bitSet(keypadStatus, 7);
+            new_0x80_state = HIGH;
+            // If the switch changed, due to noise or pressing:
+            if (new_0x80_state != last_0x80_state) {
+              // reset the debouncing timer
+              last_0x80_time = millis();
+            }
+            if ((millis() - last_0x80_time) > debounceDelay) {
+              // whatever the reading is at, it's been there for longer than the debounce
+              // delay, so take it as the actual current state.
+
+              // if the button state has changed:
+              if (new_0x80_state != button_0x80_state) {
+                button_0x80_state = new_0x80_state;
+                Serial.println("BTN: Drive Mode");
+              }
             }            
             break;
         default:
@@ -471,30 +595,32 @@ void can2Sniff(const CAN_message_t &msg) {
         }
       }
       break;
-    case 0xA100100:
-      //Serial.print("SIM100MOD Isolation State: "); Serial.println(msg.buf[0], HEX);
-      switch (msg.buf[0]);{
+    case 0xA100100://SIM100MOD Isolation Monitor
+      switch (msg.buf[0]) {
         case 0xE0:
-          SIM100MODohmsPerVolt = msg.buf[2]<<8 & msg.buf[3];//Ω/V
+          SIM100MODohmsPerVolt = (msg.buf[2]<<8) | msg.buf[3];//Ω/V
           break;
         case 0xE1:
-          SIM100MODRpKohms = msg.buf[2]<<8 & msg.buf[3];//kΩ positive
-          SIM100MODRnKohms = msg.buf[5]<<8 & msg.buf[6];//kΩ negative
+          SIM100MODRpKohms = (msg.buf[2]<<8) | msg.buf[3];//kΩ positive
+          SIM100MODRnKohms = (msg.buf[5]<<8) | msg.buf[6];//kΩ negative
           break;
         case 0xE2:
-          SIM100MODCpnF = msg.buf[2]<<8 & msg.buf[3];//Cp nF
-          SIM100MODCnnF = msg.buf[5]<<8 & msg.buf[6];//Cn nF
+          SIM100MODCpnF = (msg.buf[2]<<8) | msg.buf[3];//Cp nF
+          SIM100MODCnnF = (msg.buf[5]<<8) | msg.buf[6];//Cn nF
           break;
         case 0x0E3:
-          SIM100MODVp = msg.buf[2]<<8 & msg.buf[3];//Vp
-          SIM100MODVn = msg.buf[5]<<8 & msg.buf[6];//Vn
+          SIM100MODVp = (msg.buf[2]<<8) | msg.buf[3];//Vp
+          SIM100MODVn = (msg.buf[5]<<8) | msg.buf[6];//Vn
           break;
         case 0xE4:
-          SIM100MODVb = msg.buf[2]<<8 & msg.buf[3];//Vb
-          SIM100MODVbMax = msg.buf[5]<<8 & msg.buf[6];//Vb max
+          SIM100MODVb = (msg.buf[2]<<8) | msg.buf[3];//Vb
+          SIM100MODVbMax = (msg.buf[5]<<8) | msg.buf[6];//Vb max
           break;
         case 0xE5:
           SIMM100MODerrorFlags = msg.buf[1];//SIM100MOD error flags
+          break;
+        case 0x80:
+          SIM100MODtemp = (msg.buf[3]<<8) | msg.buf[4];//
           break;
       }
       
@@ -502,13 +628,39 @@ void can2Sniff(const CAN_message_t &msg) {
     case 0x000A0610:
 
       break;
-    
+
+    /* OpenInverter Tesla LDU V2 --------------------------------
+     * TODO: verify CAN IDs match device configuration page.
+     * Default stm32-sine firmware IDs shown below.
+     */
+    case 0x19A://LDU status: speed, torque, temperatures, DC voltage
+      LDUrpm          = (int32_t)((int16_t)((msg.buf[0]<<8) | msg.buf[1]));// TODO: confirm scaling
+      LDUtorque       = (int16_t)((msg.buf[2]<<8) | msg.buf[3]);           // TODO: confirm scaling
+      LDUmotorTemp    = (int16_t)((msg.buf[4]<<8) | msg.buf[5]);           // TODO: confirm byte map
+      LDUinverterTemp = 0;                                                  // TODO: parse from correct byte
+      LDUdcVoltage    = 0;                                                  // TODO: parse from correct byte
+      LDUstatus       = msg.buf[6];
+      break;
+    case 0x55A://LDU faults
+      LDUfaults = (msg.buf[0]<<8) | msg.buf[1];// TODO: confirm byte map
+      break;
+
+    /* EMP WP29-12V-CV-A Water Pump -----------------------------
+     * Status broadcast: 0xFBFE (64510) extended, 500kbps
+     * TODO: confirm byte map / scaling from datasheet
+     */
+    case 0xFBFE://pump status broadcast
+      pumpActualSpeed = (msg.buf[0]<<8) | msg.buf[1];// TODO: confirm byte map / scaling
+      pumpStatus      = msg.buf[2];                  // TODO: confirm byte
+      pumpFaults      = msg.buf[3];                  // TODO: confirm byte
+      break;
+
   }
 
   switch (msg.id) {
-    
+
   }
-  digitalWriteFast(4, LOW);
+  digitalWriteFast(5, LOW);
 }//end of can2Sniff(const CAN_message_t &msg)
 
 void can3Sniff(const CAN_message_t &msg) {
@@ -617,7 +769,7 @@ void wakepMBB32(){
   msg1.buf[1] = 0x10;
   msg1.buf[2] = 0x2;
   can1.write(msg1);
-  delay(20);
+  delay(1);
   
   //send wakeup to pMBB32 #2
   msg1.id = 0xAF0200;
@@ -626,7 +778,7 @@ void wakepMBB32(){
   msg1.buf[1] = 0x10;
   msg1.buf[2] = 0x2;
   can1.write(msg1);
-  delay(20);
+  delay(1);
 
   //send wakeup to pMBB32 #3
   msg1.id = 0xAF0300;
@@ -635,13 +787,13 @@ void wakepMBB32(){
   msg1.buf[1] = 0x10;
   msg1.buf[2] = 0x2;
   can1.write(msg1);
-  delay(20);
+  delay(1);
 
   //send broadcast start of measurement command to pMBB32
   msg1.id = 0xFF0000;
   msg1.len = 0;
   can1.write(msg1);
-  delay(10);
+  delay(1);
 }
 
 void shutdownpMBB32() {
@@ -650,16 +802,16 @@ void shutdownpMBB32() {
   msg1.len = 1;
   msg1.buf[0] = 0x55;
   can1.write(msg1);
-  delay(5);
+  delay(1);
   can1.write(msg1);
-  delay(5);
+  delay(1);
 
   //send shutdown to pMBB32 #2
   msg1.id = 0xAF0200;
   can1.write(msg1);
-  delay(5);
+  delay(1);
   can1.write(msg1);
-  delay(5);
+  delay(1);
 
   //send shutdown to pMBB32 #1
   msg1.id = 0xAF0100;
@@ -690,7 +842,7 @@ void ReadAnalogStatuses() {
 }//end of ReadAnalogStatuses()
 
 void displayStatus() {
-  digitalWriteFast(5, HIGH);
+  digitalWriteFast(6, HIGH);
   /*
   Serial.print("keypadStatus: ");
   Serial.println(keypadStatus, BIN);
@@ -764,9 +916,11 @@ void displayStatus() {
   throttle = 100;
   batteryVoltage = 1255;
 
+#ifdef UBLOX_GNSS
   //groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;
   //GPSaltitude = myGNSS.getAltitudeMSL() / 3300;
-  
+#endif
+
   msg3.flags.extended = 1;
   msg3.id = 0xc80;
   msg3.len = 8;
@@ -779,12 +933,12 @@ void displayStatus() {
   msg3.buf[6] = throttle*10;//TPS = V/10
   msg3.buf[7] = (throttle*10)>>8;
   can3.write(msg3); 
-  delay(10);
+  delay(1);
 
   msg3.id = 0xc81;
   msg3.len = 8;
-  msg3.buf[0] = 0xFF;
-  msg3.buf[1] = 0x55;
+  msg3.buf[0] = 0;
+  msg3.buf[1] = 0;
   msg3.buf[2] = IVTpackVoltage;
   msg3.buf[3] = IVTpackVoltage>>8;
   msg3.buf[4] = IVTpackCurrent;
@@ -792,7 +946,7 @@ void displayStatus() {
   msg3.buf[6] = batteryVoltage;
   msg3.buf[7] = batteryVoltage>>8;
   can3.write(msg3);
-  delay(10);
+  delay(1);
 
   msg3.id = 0xc82;
   msg3.len = 8;
@@ -805,20 +959,21 @@ void displayStatus() {
   msg3.buf[6] = GPSaltitude;
   msg3.buf[7] = GPSaltitude>>8;
   can3.write(msg3);
-  delay(10);
+  delay(1);
 
   msg3.id = 0xc83;
   msg3.len = 8;
   msg3.buf[0] = highestCellV - lowestCellV;
   msg3.buf[1] = (highestCellV - lowestCellV)>>8;
-  msg3.buf[2] = 0;
-  msg3.buf[3] = 0;
-  msg3.buf[4] = 0;
-  msg3.buf[5] = 0;
-  msg3.buf[6] = 0;
+  msg3.buf[2] = SIM100MODohmsPerVolt;
+  msg3.buf[3] = SIM100MODohmsPerVolt>>8;
+  msg3.buf[4] = SIM100MODtemp;
+  msg3.buf[5] = SIM100MODtemp>>8;
+  msg3.buf[6] = fixType;
   msg3.buf[7] = 0;
   can3.write(msg3);
 
+#ifdef TFT240_240_display
   tft.setCursor(110,5);//Pack V is on line 5
   tft.setTextColor(ST77XX_YELLOW);
   tft.setFont(Arial_20);
@@ -836,6 +991,7 @@ void displayStatus() {
   tft.setFont(Arial_20);
   tft.fillRect(110,95,100,30,ST77XX_BLUE);
   tft.println((float)batteryVoltage/100, 2);
+#endif
 /*
   displayBuffer[0] = 0x44;
   displayBuffer[1] = 0x33;
@@ -857,9 +1013,9 @@ void displayStatus() {
   udpServer.beginPacket(targetIP, targetPort);
   udpServer.write(displayBuffer, 16);
   udpServer.endPacket();*/
-  digitalWriteFast(5, LOW);
+  digitalWriteFast(6, LOW);
 }//end of displayStatus()
-
+#ifdef TCP_Interface
 void SendCANFramesToEth(EthernetClient& client) {
   //client.beginFrame(clientIP, staticIP, 32)
       
@@ -891,69 +1047,346 @@ void forwardAsRD44Frame(packet_t *packet, EthernetClient client) {
   client.write((byte *)&packet->id, 4);
   client.write(packet->dataArray, 8);
 }
+#endif
+#ifdef UBLOX_GNSS
+void printPVTdata(UBX_NAV_PVT_data_t *ubxDataStruct)
+{
+    //Serial.println();
+
+    //Serial.print(F("Time: ")); // Print the time
+    uint8_t hms = ubxDataStruct->hour; // Print the hours
+    //if (hms < 10) Serial.print(F("0")); // Print a leading zero if required
+    //Serial.print(hms);
+    //Serial.print(F(":"));
+    hms = ubxDataStruct->min; // Print the minutes
+    //if (hms < 10) Serial.print(F("0")); // Print a leading zero if required
+    //Serial.print(hms);
+    //Serial.print(F(":"));
+    hms = ubxDataStruct->sec; // Print the seconds
+    //if (hms < 10) Serial.print(F("0")); // Print a leading zero if required
+    //Serial.print(hms);
+    //Serial.print(F("."));
+    unsigned long millisecs = ubxDataStruct->iTOW % 1000; // Print the milliseconds
+    //if (millisecs < 100) Serial.print(F("0")); // Print the trailing zeros correctly
+    //if (millisecs < 10) Serial.print(F("0"));
+    //Serial.print(millisecs);
+
+    long latitude = ubxDataStruct->lat; // Print the latitude
+    //Serial.print(F(" Lat: "));
+    //Serial.print(latitude);
+
+    long longitude = ubxDataStruct->lon; // Print the longitude
+    //Serial.print(F(" Long: "));
+    //Serial.print(longitude);
+    //Serial.print(F(" (degrees * 10^-7)"));
+
+    GPSaltitude = ubxDataStruct->hMSL; // Print the height above mean sea level
+    //Serial.print(F(" Height above MSL: "));
+    //Serial.print(GPSaltitude);
+    //Serial.print(F(" (mm)"));
+
+    groundSpeed = ubxDataStruct->gSpeed; // Print the ground speed
+    //Serial.print(F(" Ground speed: "));
+    //Serial.print(groundSpeed);
+    //Serial.println(F(" (mm/s)"));
+    fixType = ubxDataStruct->fixType; // Print the GNSS fix type
+    //Serial.print(F(" Fix type: "));
+    //Serial.print(fixType);
+    //Serial.println(F(" (0=no fix, 1=dead reckoning only, 2=2D-fix, 3=3D-fix, 4=GNSS + dead reckoning, 5=time only fix)"));
+}
+#endif
+// State transition functions
+void Off_enter()
+{
+  Serial.println("Entering Off state");
+  VCUstate = VCU_STATE_OFF;
+}
+
+void Off_exit()
+{
+  Serial.println("Exiting Off state");
+  //enable negative contactor
+  PDUmsg1.buf[0] = 0x0D;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
+  /* Check for welded contactor here*/
+
+  PDUmsg1.buf[3] = 0;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
+}
+
+void Idle_enter()
+{
+  Serial.println("Entering Idle state");
+  VCUstate = VCU_STATE_IDLE;
+  PDUmsg1.buf[2] = 5;//channel 3 current limit 2A (2/0.4A = 5) - positive pre-charge
+
+  msg2.id = 0x18EF2100;//keypad button color command
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04;
+  msg2.buf[1] = 0x1B;
+  msg2.buf[2] = KEYPAD_CMD_SET_LED;
+  msg2.buf[3] = 0x05;//button 5
+  msg2.buf[4] = KEYPAD_COLOR_AMBER;
+  msg2.buf[5] = KEYPAD_MODE_BLINK;
+  msg2.buf[6] = 0x00;
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
+  delay(1);
+
+  //if pre-charge fails after 5 seconds, turn off pre-charge and send error message
+  delay(5000);
+  msg2.id = 0x18EF2100;//keypad button color command
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04;
+  msg2.buf[1] = 0x1B;
+  msg2.buf[2] = KEYPAD_CMD_SET_LED;
+  msg2.buf[3] = 0x05;//button 5
+  msg2.buf[4] = KEYPAD_COLOR_AMBER;
+  msg2.buf[5] = KEYPAD_MODE_ALT_BLINK;
+  msg2.buf[6] = KEYPAD_COLOR_RED;
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
+  delay(1);
+
+
+  /* Send SMS
+  0 = send "KL30 connected" message
+  1 = send "KL15 on" message
+  2 = send "Something happened..." message
+  3 = send "Charging stopped..." message
+  4 = send "Charging started..." message
+  5 = send "Temperature warning..." message
+  any other value  = send "Invalid request..." message
+  */
+  msg3.id = 0xC79;//send SMS
+  msg3.len = 1;
+  msg3.buf[0] = 1;//send "KL15 on" message
+  can3.write(msg3);
+  delay(1);
+}
+
+void Charge_enter()
+{
+  Serial.println("Entering Charge state");
+  VCUstate = VCU_STATE_CHARGE;
+}
+
+void Drive_enter()
+{
+  Serial.println("Entering Drive state");
+  VCUstate = VCU_STATE_DRIVE;
+}
+
+void Idle_exit()
+{
+  Serial.println("Exiting Idle state");
+  //disable positive and negative contactors
+  PDUmsg1.buf[0] = 0;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
+  PDUmsg1.buf[3] = 0;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
+}
+
+void on_trans_Off_Idle()
+{
+  Serial.println("Transitioning from Off to Idle");
+  
+
+}
+
+void on_trans_Idle_Off()
+{
+  Serial.println("Transitioning from Idle to Off");
+  
+}
+
+void on_trans_Idle_Drive()
+{
+  Serial.println("Transitioning from Idle to Drive");
+  
+  
+}
+
+void on_trans_Drive_Idle()
+{
+  Serial.println("Transitioning from Drive to Idle");
+  
+}
+
+void on_trans_Idle_Charge()
+{
+  Serial.println("Transitioning from Idle to Charge");
+  
+}
+
+void on_trans_Charge_Idle()
+{
+  Serial.println("Transitioning from Charge to Idle");
+  
+}
+
+void check_KL15()
+{
+  bool kl15 = digitalRead(KL15_PIN) == 1;
+  static bool last_kl15 = !kl15;
+  if(kl15 != last_kl15) {
+    last_kl15 = kl15;
+    Serial.print("KL15: ");
+    Serial.println(kl15 ? "ON" : "OFF");
+  }
+  if(kl15) {
+    fsm.trigger(KL15_ON);
+  } else {
+    //fsm.trigger(KL15_OFF);
+  }
+}
+
+void check_KL17()
+{
+  if(KL17state) {//internal KL15 (switched 'ignition' state)
+    fsm.trigger(KL17_ON);
+  } else {
+    //fsm.trigger(KL17_OFF);
+  }
+}
+void check_Drive()
+{
+  if(button_0x08_state) {
+    fsm.trigger(DRIVE_ON);
+  } else {
+    //fsm.trigger(DRIVE_OFF);
+  }
+  
+}
+
+
+/* BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN master on Serial3
+ * LIN 2.x, 19200 baud. Uses gicking/LIN master portable (LIN_Master_HardwareSerial).
+ * TODO: confirm node ID, response frame length, byte map, and checksum type
+ *       from BMW LIN specification / ISTA service documentation.
+ */
+LIN_Master_HardwareSerial linBus(Serial3, "Valve"); // Serial3: RX3=pin7, TX3=pin8
+
+void linInit() {
+  linBus.begin(LIN_BAUD);
+  //pinMode(LIN_EN_PIN, OUTPUT);    // TODO: uncomment when enable pin assigned
+  //digitalWrite(LIN_EN_PIN, HIGH); // enable LIN transceiver
+}
+
+// Request status from valve (slave-response frame)
+void linReadValve() {
+  uint8_t buf[2] = {0};            // TODO: confirm response frame length from BMW docs
+  LIN_Master_Base::error_t err = linBus.receiveSlaveResponseBlocking(LIN_Master_Base::LIN_V2, LIN_VALVE_ID, sizeof(buf), buf);
+  if (err == LIN_Master_Base::NO_ERROR) {
+    valveStatus   = buf[0];        // TODO: confirm byte map
+    valvePosition = buf[1];        // TODO: confirm byte map
+    valveOnline   = true;
+  } else {
+    valveOnline = false;
+  }
+}
+
+// Command valve position (master-request frame)
+// TODO: confirm frame length and byte map from BMW LIN spec / ISTA docs
+void linWriteValve(uint8_t position) {
+  valvePosition = position;
+  // uint8_t data[] = {position};
+  // linBus.sendMasterRequestBlocking(LIN_Master_Base::LIN_V2, LIN_VALVE_ID, sizeof(data), data);
+}
+
+/* Dual Pot Throttle (EVWest, OEM pedal)
+ * Both pots are read and scaled independently. A plausibility check confirms
+ * they agree within THROTTLE_PLAUSIBILITY_PCT. On fault, throttle is zeroed.
+ * TODO: bench-calibrate the MIN/MAX constants, then remove the hardcoded
+ *       throttle = 100 override in displayStatus().
+ */
+void readThrottle() {
+  throttlePot1Raw = analogRead(THROTTLE_POT1_PIN);
+  throttlePot2Raw = analogRead(THROTTLE_POT2_PIN);
+
+  uint16_t pct1 = constrain(map(throttlePot1Raw, THROTTLE_POT1_MIN, THROTTLE_POT1_MAX, 0, 100), 0, 100);
+  uint16_t pct2 = constrain(map(throttlePot2Raw, THROTTLE_POT2_MIN, THROTTLE_POT2_MAX, 0, 100), 0, 100);
+
+  throttlePlausibility = abs((int16_t)pct1 - (int16_t)pct2) <= THROTTLE_PLAUSIBILITY_PCT;
+  throttle = throttlePlausibility ? pct1 : 0;
+}
 
 /* Setup */
 void setup() {
-  // put your setup code here, to run once:
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);  // Turn LCD backlight on
-
   //timing debug pins
-  pinMode(2,OUTPUT);        //loop timing
-  digitalWriteFast(2, LOW);
-  pinMode(3,OUTPUT);        //CAN1 RX timing
+  pinMode(3,OUTPUT);        //loop timing
   digitalWriteFast(3, LOW);
-  pinMode(4,OUTPUT);        //CAN2 RX timing
+  pinMode(4,OUTPUT);        //CAN1 RX timing
   digitalWriteFast(4, LOW);
-  pinMode(5,OUTPUT);        //display timing
+  pinMode(5,OUTPUT);        //CAN2 RX timing
   digitalWriteFast(5, LOW);
+  pinMode(6,OUTPUT);        //display timing
+  digitalWriteFast(6, LOW);
   
   Serial.begin(115200);
-  delay(5);
-  Serial.println("Hello Teensy 4.1 VCU with GPS");
+  delay(50);
 
-  //digital.pinMode(2, INPUT_PULLUP, RISING);// wake pin
+  linInit();//BMW changeover valve LIN master on Serial3
 
-  initCAN(500000, 500000, 1000000);
+  //digital.pinMode(KL15_PIN, INPUT_PULLDOWN, RISING);// wake pin
+
+  initCAN(500000, 500000, 1000000);//start CAN1, CAN2, CAN3 at 500kbps, 500kbps, 1Mbps
   delay(100);
-/*
+
+#ifndef TFT240_240_display
+  pinMode(LED_BUILTIN, OUTPUT);//built-in LED or 240x240 TFT backlight
+#else
+  pinMode(LCD_BL, OUTPUT);
+  digitalWrite(LCD_BL, HIGH);  // Turn LCD backlight on  
+#endif
+
+#ifdef UBLOX_GNSS
   Wire.setClock(400 * 1000);//for U-blox GPS
   Wire.begin();
- 
-  if (myGNSS.begin() == false)
+  
+  while (myGNSS.begin() == false)
   {
     Serial.println(F("u-blox GNSS not detected at default I2C address. Please check wiring. Freezing."));
-    while (1);
+    //while (1);
+    myGNSS.hardReset();
+    delay(500);
   }
+  
   myGNSS.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA); //Set the I2C port to output both NMEA and UBX messages
-  myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); //Save (only) the communications port settings to flash and BBR
-*/
   //This will pipe all NMEA sentences to the serial port so we can see them
   //myGNSS.setNMEAOutputPort(Serial);
 
+  myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); //Save (only) the communications port settings to flash and BBR
+  //myGNSS.setNMEAOutputPort(SerialUSB);
+  myGNSS.setNavigationFrequency(10); //Set output to 10 times a second
+  //myGNSS.setAutoPVT(true);
+  myGNSS.setAutoPVTcallbackPtr(&printPVTdata); // Enable automatic NAV PVT messages with callback to printPVTdata
+  //myGNSS.setAutoNAVSATcallbackPtr(&newNAVSAT); // Enable automatic NAV SAT messages with callback to newNAVSAT
+#endif
+
+#ifdef TCP_Interface
   // get mac address
   //teensyMAC(mac);
   //startEthernet();
+#endif
 
-  //send PDU-8 driver settings
+  //send PDU-8 driver settings - without sending 0x0A0630, this is simple ON/OFF control
   PDUmsg1.id = 0x0A0620;
   PDUmsg1.len = 8;
-  PDUmsg1.buf[0] = 0x0D;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
+  PDUmsg1.buf[0] = 0;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
   PDUmsg1.buf[1] = 0x05;//channel 2 current limit 2A (2/0.4A = 5) - pMBB32s
-  PDUmsg1.buf[2] = 0x05;//channel 3 current limit 2A (2/0.4A = 5) - positive pre-charge
-  PDUmsg1.buf[3] = 0x0D;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
+  PDUmsg1.buf[2] = 0;//channel 3 current limit 2A (2/0.4A = 5) - positive pre-charge
+  PDUmsg1.buf[3] = 0;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
   PDUmsg1.buf[4] = 0;
   PDUmsg1.buf[5] = 0;
   PDUmsg1.buf[6] = 0;
   PDUmsg1.buf[7] = 0; 
   can1.write(PDUmsg1);
-  delay(2);
+  delay(1);
 
-  //send PDU-8 driver outputs
+  //send PDU-8 driver outputs - only used for PWM control (unverified)
   PDUmsg2.id = 0x0A0630;
   PDUmsg2.len = 8;
   PDUmsg2.buf[0] = 0;//channel 1 - negative contactor
-  PDUmsg2.buf[1] = 0xFF;//channel 2 - pMBB32
+  PDUmsg2.buf[1] = 0xFE;//channel 2 - pMBB32
   PDUmsg2.buf[2] = 0;//channel 3 - positive pre-charge relay
   PDUmsg2.buf[3] = 0;//channel 4 - positive contac 
   PDUmsg2.buf[4] = 0;
@@ -962,77 +1395,40 @@ void setup() {
   PDUmsg2.buf[7] = 0; 
   can1.write(PDUmsg2);
 
-  t1.begin(callback_cells_pdu, 62.5ms);//62.5ms);
-  delay(500);
+  t1.begin(callback_t1, t1CallbackRate);
+  delay(200);
   wakepMBB32();
 
-  t2.begin(callback_cell_sample, 150ms);
-  //t3.begin(callback1000ms, 1000ms); 
+  t2.begin(callback_t2, t2CallbackRate);
+  t3.begin(callback_t3, t3CallbackRate);
 
-  msg2.id = 0x411;//send IVT command
+  msg2.id = 0x412;//send IVT command
   msg2.flags.extended = 0;
   msg2.len = 6;
   msg2.buf[0] = 0x34;//set SET_MODE command 
   msg2.buf[1] = 0;//set actual mode: 0 = stop, 1 = run
   msg2.buf[2] = 1;//set startup operation mode: 0 = stop, 1 = run
-  msg2.buf[3] = 0;
-  msg2.buf[4] = 0;
-  msg2.buf[5] = 0;
   can2.write(msg2);
   delay(1);
-  msg2.id = 0x411;//send IVT command
-  msg2.flags.extended = 0;
-  msg2.len = 6;
   msg2.buf[0] = 0x24;//configuration of measurement 0x2x: 0 = I, 1 = U1, 2 = U2, 3 = U3, 4 = T, 5 = W, 6 = As, 7 = Wh
   msg2.buf[1] = 2;//low nibble = 0 for disabled, 1 for triggered, 2 for cyclic running
-  msg2.buf[2] = 0;
   msg2.buf[3] = 0xC8;//200ms
-  msg2.buf[4] = 0;
-  msg2.buf[5] = 0;
   can2.write(msg2);
   delay(1);
-  msg2.id = 0x411;//send IVT command
-  msg2.flags.extended = 0;
-  msg2.len = 6;
   msg2.buf[0] = 0x25;//configuration of measurement 0x2x: 0 = I, 1 = U1, 2 = U2, 3 = U3, 4 = T, 5 = W, 6 = As, 7 = Wh
-  msg2.buf[1] = 2;//low nibble = 0 for disabled, 1 for triggered, 2 for cyclic running
-  msg2.buf[2] = 0;
   msg2.buf[3] = 0x64;//100ms
-  msg2.buf[4] = 0;
-  msg2.buf[5] = 0;
   can2.write(msg2);
   delay(1);
-  msg2.id = 0x411;//send IVT command
-  msg2.flags.extended = 0;
-  msg2.len = 6;
   msg2.buf[0] = 0x26;//configuration of measurement 0x2x: 0 = I, 1 = U1, 2 = U2, 3 = U3, 4 = T, 5 = W, 6 = As, 7 = Wh
-  msg2.buf[1] = 2;//low nibble = 0 for disabled, 1 for triggered, 2 for cyclic running
-  msg2.buf[2] = 0;
-  msg2.buf[3] = 0x64;//100ms
-  msg2.buf[4] = 0;
-  msg2.buf[5] = 0;
   can2.write(msg2);
   delay(1);
-  msg2.id = 0x411;//send IVT command
-  msg2.flags.extended = 0;
-  msg2.len = 6;
   msg2.buf[0] = 0x27;//configuration of measurement 0x2x: 0 = I, 1 = U1, 2 = U2, 3 = U3, 4 = T, 5 = W, 6 = As, 7 = Wh
-  msg2.buf[1] = 2;//low nibble = 0 for disabled, 1 for triggered, 2 for cyclic running
-  msg2.buf[2] = 0;
   msg2.buf[3] = 0x64;//100ms
-  msg2.buf[4] = 0;
-  msg2.buf[5] = 0;
   can2.write(msg2);
   delay(1);
-  msg2.id = 0x411;//send IVT command
-  msg2.flags.extended = 0;
-  msg2.len = 6;
   msg2.buf[0] = 0x34;//set SET_MODE command 
   msg2.buf[1] = 1;//set actual mode: 0 = stop, 1 = run
   msg2.buf[2] = 1;//set startup operation mode: 0 = stop, 1 = run
-  msg2.buf[3] = 0;
-  msg2.buf[4] = 0;
-  msg2.buf[5] = 0;
   can2.write(msg2);
   delay(1);
 
@@ -1041,23 +1437,59 @@ void setup() {
   msg2.len = 1;
   msg2.buf[0] = 1;//request part name 0
   can2.write(msg2);
-  delay(1);
+  delay(2);
   msg2.id = 0xA100101;//send SIM100MOD Request Part Name command
   msg2.len = 1;
   msg2.buf[0] = 2;//request part name 1
   can2.write(msg2);
-  delay(1);
+  delay(2);
   msg2.id = 0xA100101;//send SIM100MOD Request Part Name command
   msg2.len = 1;
   msg2.buf[0] = 3;//request part name 2
   can2.write(msg2);
-  delay(1);
+  delay(2);
   msg2.id = 0xA100101;//send SIM100MOD Request Part Name command
   msg2.len = 1;
   msg2.buf[0] = 4;//request part name 3
   can2.write(msg2);
+  delay(1);
+
+  /* OpenInverter Tesla LDU V2 init ------------------------------------------
+   * Send torque command frame to enable the inverter.
+   * TODO: confirm CAN ID (0x19B default), byte map, and enable sequence.
+   * buf[0:1] = torque setpoint (Nm, signed 16-bit, big-endian)
+   * buf[2]   = enable bit (0x01 = enable, 0x00 = disable)
+   */
+  //msg2.id = 0x19B;
+  //msg2.flags.extended = 0;
+  //msg2.len = 3;
+  //msg2.buf[0] = 0x00;//torque setpoint high byte (0 Nm)
+  //msg2.buf[1] = 0x00;//torque setpoint low byte
+  //msg2.buf[2] = 0x01;//enable
+  //can2.write(msg2);
+  //delay(1);
+
+  /* EMP WP29-12V-CV-A Water Pump init ---------------------------------------
+   * Command frame: 0x7A00 (31232) extended, 500kbps
+   * Send initial speed setpoint (0 RPM / off) to pump.
+   * TODO: confirm byte map / scaling from datasheet.
+   */
+  pumpSetpoint = 0;
+  msg2.id = 0x7A00;
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = pumpSetpoint >> 8;  // TODO: confirm byte map / scaling
+  msg2.buf[1] = pumpSetpoint & 0xFF;
+  msg2.buf[2] = 0;
+  msg2.buf[3] = 0;
+  msg2.buf[4] = 0;
+  msg2.buf[5] = 0;
+  msg2.buf[6] = 0;
+  msg2.buf[7] = 0;
+  can2.write(msg2);
   delay(1); 
 
+#ifdef TFT240_240_display
   tft.init(240, 240);
   tft.setRotation(0);
   tft.fillScreen(ST77XX_BLUE);
@@ -1074,21 +1506,62 @@ void setup() {
   tft.setCursor(60 ,95);
   tft.println("LV: ");
 
-  tft.setFont(Arial_16);
-  tft.setCursor(10,212);
+  tft.setFont(Arial_12);
+  tft.setCursor(10,220);
   tft.println("EK9 EV VCU");
+#endif
+/*
+  // Set all keypad buttons to amber at startup
+  msg2.id = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04;
+  msg2.buf[1] = 0x1B;
+  msg2.buf[2] = KEYPAD_CMD_LIVE_BACKLIGHT_COLOR;
+  msg2.buf[3] = KEYPAD_COLOR_AMBER;// Amber
+  msg2.buf[4] = 0xFF;
+  msg2.buf[5] = 0xFF;
+  msg2.buf[6] = 0xFF;
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
+  delay(1);
+
+  // Set brightness of all keypad buttons to 50% at startup
+  msg2.id = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04;
+  msg2.buf[1] = 0x1B;
+  msg2.buf[2] = KEYPAD_CMD_LIVE_BRIGHTNESS;
+  msg2.buf[3] = 0x20;// 50% brightness
+  msg2.buf[4] = 0xFF;
+  msg2.buf[5] = 0xFF;
+  msg2.buf[6] = 0xFF;
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
+  delay(1);
+*/
+
+  fsm.add_transition(&state_Off, &state_Idle, KL15_ON, &on_trans_Off_Idle);
+  fsm.add_transition(&state_Idle, &state_Drive, DRIVE_ON, &on_trans_Idle_Drive);
+  fsm.add_transition(&state_Idle, &state_Charge, CHARGE_ON, &on_trans_Idle_Charge);
+  fsm.add_transition(&state_Idle, &state_Off, KL15_OFF, &on_trans_Idle_Off);
+
 }//end of setup()
 
 
 /* Main */
 void loop() {
   // put your main code here, to run repeatedly:
-  callback_main_loop_start = millis();
-  digitalWriteFast(2, HIGH);  
+  
+  //callback_main_loop_start = millis();
+  digitalWriteFast(3, HIGH);  
 
   can1.events();//Call to look for any input
   can2.events();//Call to look for any input
   //can3.events();//Output only
+
+  readThrottle();
  
     //Serial.println("Shutting down");
     // test shutdown and wake
@@ -1102,72 +1575,14 @@ void loop() {
     // Feed the sleep function its wakeup parameters, then go to sleep.
     //Snooze.sleep( config_teensy40 );// return module that woke processor
 
-/*  
-  //SendCANFrameToClient(3200);
-  // if an incoming client connects, there will be bytes available to read:
-  
-  EthernetClient client = server.available();
 
-  if (client) {
-    while (client.connected()) {
-      if (client.available()) {
-        //char c = client.read();
-  // if you've gotten to the end of the line (received a newline
-        // character) and the line is blank, the http request has ended,
-        // so you can send a reply
-//        if (c == '\n' && currentLineIsBlank) {
-          
-          client.println("HTTP/1.1 200 OK");
-          client.println("Content-Type: text/html");
-          client.println("Connection: close");  // the connection will be closed after completion of the response
-          client.println("Refresh: 2");  // refresh the page automatically every 5 sec
-          client.println();
-          client.println("<!DOCTYPE HTML>");
-          client.println("<html>");
-          client.println("Hello World!");
-          client.print("<br />");
-          client.print("Max Cell Voltage = ");
-          client.print((double)highestCellV*0.000076293945);
-          client.print("<br />");
-          client.print("Min Cell Voltage = ");
-          client.print((double)lowestCellV*0.000076293945);
-          client.print("<br />");
-          client.print("12V Battery Voltage = ");
-          client.print((double)batteryVoltage/100);
-          client.println("<br />"); 
-          client.println("</html>");
+#ifdef UBLOX_GNSS
+  myGNSS.checkUblox(); //See if new data is available. Process bytes as they come in
+  myGNSS.checkCallbacks(); // Check if any callbacks are waiting to be processed
+#endif
 
-          byte header[] = {0x44, 0x33, 0x22, 0x11};
-          byte frameID[] = {0x80, 0xC, 0, 0};
-          client.write(header, 4);
-          client.write(frameID, 4);
-          client.write(msg3.buf, 8);
+fsm.run_machine();
 
-          //client.print(displayBuffer, 16);
-//          break;
-//        }
-//        if (c == '\n') {
-          // you're starting a new line
-//          currentLineIsBlank = true;
-//        } else if (c != '\r') {
-          // you've gotten a character on the current line
-//          currentLineIsBlank = false;
-//        }
-      }
-    }
-  }
-  // give the web browser time to receive the data
-  delay(10);
-  client.stop();
-*/
-  //myGNSS.checkUblox(); //See if new data is available. Process bytes as they come in.
-  //groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;//convert mm/s to mph
-  //GPSaltitude = myGNSS.getAltitudeMSL() / 3300;//feet
-  //Serial.print("Altitude ");
-  //Serial.print(myGNSS.getAltitudeMSL() / 3300, DEC); Serial.println(" feet");
-  //Serial.print("Speed ");
-  //Serial.print(myGNSS.getGroundSpeed() * 0.00223694, DEC);  Serial.println(" mph");//convert mm/s to mph
-  //delay(50);
 #ifdef debug_loop_timing
   //callback_main_loop_finish = millis() - callback_main_loop_start;
   tft.setFont(Arial_16);
@@ -1183,5 +1598,5 @@ void loop() {
     tft.println(callback_main_loop_finish);
   }
 #endif
-  digitalWriteFast(2, LOW);
+  digitalWriteFast(3, LOW);
 }//end of loop()

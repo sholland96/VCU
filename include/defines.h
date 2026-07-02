@@ -2,12 +2,97 @@
 *
 */
 
-#define pMBB32powerOn 0xFF;
+typedef enum {
+  VCU_STATE_OFF = 0,
+  VCU_STATE_IDLE,
+  VCU_STATE_DRIVE,
+  VCU_STATE_CHARGE,
+  VCU_STATE_FAULT
+} VCUStateEnum;
+
+#define KEYPAD_COLOR_OFF          0
+#define KEYPAD_COLOR_RED          1
+#define KEYPAD_COLOR_GREEN        2
+#define KEYPAD_COLOR_BLUE         3
+#define KEYPAD_COLOR_YELLOW       4
+#define KEYPAD_COLOR_CYAN         5
+#define KEYPAD_COLOR_MAGENTA      6
+#define KEYPAD_COLOR_WHITE        7
+#define KEYPAD_COLOR_AMBER        8
+#define KEYPAD_COLOR_YELLOW_GREEN 9
+
+// Keypad LED mode (byte 5)
+#define KEYPAD_MODE_SOLID         0x01
+#define KEYPAD_MODE_BLINK         0x02
+#define KEYPAD_MODE_ALT_BLINK     0x03
+
+// Keypad functional control commands (byte 2)
+#define KEYPAD_CMD_SET_LED                0x01  // set individual button LED color/mode
+#define KEYPAD_CMD_LIVE_BRIGHTNESS        0x03  // live brightness command
+#define KEYPAD_CMD_LIVE_BACKLIGHT_COLOR   0x1C  // live global backlight color (byte 3: color index)
+#define KEYPAD_CMD_BATCH_MODE             0x37  // switch single vs batch LED mode
+#define KEYPAD_CMD_BACKLIGHT_BRIGHTNESS   0x7B  // global backlight brightness (byte 3: 0x00–0x3F)
+#define KEYPAD_CMD_STATUS_LED_BRIGHTNESS  0x7C  // button status LED brightness (byte 3: 0x00–0x3F)
+#define KEYPAD_CMD_BACKLIGHT_COLOR        0x7D  // global backlight color (byte 3: color index)
+#define KEYPAD_CMD_EVENT_TX               0x72  // toggle event-driven transmissions
+#define KEYPAD_CMD_PERIODIC_TX            0x71  // toggle periodic heartbeat transmission
+#define KEYPAD_CMD_TX_SPEED               0x77  // periodic TX interval (byte 3: value × 10ms)
+#define KEYPAD_CMD_BAUD_RATE              0x6F  // change CAN baud rate
+#define KEYPAD_CMD_SOURCE_ADDR            0x70  // change device source address
+#define KEYPAD_CMD_FACTORY_RESET          0x34  // factory reset (byte 3: 0x01 to confirm)
+
+// Batch LED mode selections (byte 3 for KEYPAD_CMD_BATCH_MODE)
+#define KEYPAD_BATCH_SINGLE           0x00  // standard single-LED mode (default)
+#define KEYPAD_BATCH_ENABLE           0x01  // batch LED mode
+
+// CAN baud rate selections (byte 3 for KEYPAD_CMD_BAUD_RATE)
+#define KEYPAD_BAUD_125K              0x00
+#define KEYPAD_BAUD_250K              0x01
+#define KEYPAD_BAUD_500K              0x02
+#define KEYPAD_BAUD_1M                0x03
+
+#define pMBB32powerOn 0xFE;
 #define pMBB32powerOff 0;
 
 #define ON 0xFF;// duty cycle - 100/0.392157 = 0xFF = 100%
 #define OFF 0;
 
+#define t1CallbackRate 62.5ms
+#define t2CallbackRate 200ms
+#define t3CallbackRate 1000ms
+
+//#define debug_loop_timing
+//#define TFT240_240_display
+#define UBLOX_GNSS
+//#define TCP_Interface
+
+#ifdef TFT240_240_display
+#include <SPI.h>
+#include <ST7735_t3.h> // Hardware-specific library
+#include <ST7789_t3.h> // Hardware-specific library
+#include <ST7735_t3_font_Arial.h>
+
+#define TFT_RST    32   // chip reset
+#define TFT_DC     9   // tells the display if you're sending data (D) or commands (C)   --> WR pin on TFT
+#define TFT_MOSI   11  // Data out    (SPI standard)
+#define TFT_SCLK   13  // Clock out   (SPI standard)
+#define TFT_CS     10  // chip select (SPI standard)
+
+int LCD_BL = 33;       // LCD back light control
+
+ST7789_t3 tft = ST7789_t3(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+#endif
+
+#ifdef UBLOX_GNSS
+#include <i2c_driver_wire.h> //Needed for I2C to GNSS
+
+#include <SparkFun_u-blox_GNSS_Arduino_Library.h> //Click here to get the library: http://librarymanager/All#SparkFun_u-blox_GNSS
+
+SFE_UBLOX_GNSS myGNSS;
+#endif
+
+#ifdef TCP_Interface
+#include <NativeEthernet.h>
 // Set the static IP to something other than INADDR_NONE (all zeros)
 // to not use DHCP. The values here are just examples.
 IPAddress localIP(192, 168, 1, 101);
@@ -19,11 +104,15 @@ uint16_t targetPort = 35000; // Port number on the target device
 EthernetServer server(targetPort);
 EthernetClient connectedClient;
 //EthernetUDP udpServer;
+#endif
 
 uint8_t pMBB32stale1;
 uint8_t pMBB32stale2;
 uint8_t pMBB32stale3;
 uint8_t pMBB32staleMax;
+uint32_t lastUpdatePMBB1 = 0;
+uint32_t lastUpdatePMBB2 = 0;
+uint32_t lastUpdatePMBB3 = 0;
 
 uint8_t counter = 0;
 
@@ -60,10 +149,10 @@ uint16_t lowestModule;
 uint16_t highestCellV;
 uint16_t highestCell;
 uint16_t highestModule;
-uint32_t IVTpackCurrent;
-uint32_t IVTpackVoltage;
-uint32_t IVTpreChargeV;
-uint32_t IVTvoltage3;
+uint32_t IVTpackCurrent;//1mA resolution
+uint32_t IVTpackVoltage;//1mV resolution
+uint32_t IVTpreChargeV;//1mV resolution
+uint32_t IVTvoltage3;//1mV resolution
 uint32_t IVTtemp;
 uint32_t IVTpower;
 uint32_t IVTcoulombCounter;
@@ -78,7 +167,37 @@ uint16_t SIM100MODVn;
 uint16_t SIM100MODVb;
 uint16_t SIM100MODVbMax;
 uint8_t SIMM100MODerrorFlags;
+uint32_t SIM100MODtemp;
 uint16_t batteryVoltage;
+
+// OpenInverter Tesla LDU V2 (CAN2 @ 500kbps) -- TODO: confirm IDs from device config page
+// TX to LDU:   0x19B  torque command (sent periodically)
+// RX from LDU: 0x19A  status, 0x55A faults
+int32_t  LDUrpm;           // motor speed (RPM)
+int16_t  LDUtorque;        // actual torque (Nm)
+int16_t  LDUmotorTemp;     // motor temperature (°C * 10)
+int16_t  LDUinverterTemp;  // inverter temperature (°C * 10)
+uint16_t LDUdcVoltage;     // DC bus voltage (V * 10)
+uint16_t LDUstatus;        // status bitfield
+uint16_t LDUfaults;        // fault bitfield
+
+// BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial3 (RX3=pin7, TX3=pin8)
+// TODO: confirm LIN node ID and full frame spec from BMW service docs
+#define LIN_BAUD      19200     // LIN 2.x
+#define LIN_VALVE_ID  0x10      // TODO: confirm BMW LIN node address
+// #define LIN_EN_PIN ?         // TODO: assign LIN transceiver enable pin
+uint8_t  valvePosition = 0;     // last commanded position (encoding TBD)
+uint8_t  valveStatus   = 0;     // last reported status byte
+bool     valveOnline   = false; // true once first valid response received
+
+// EMP WP29-12V-CV-A Smart Flow Water Pump (CAN2 @ 500kbps)
+// TX to pump:   0x7A00  (31232) speed setpoint (extended)
+// RX from pump: 0xFBFE  (64510) status / actual speed (extended)
+// TODO: confirm byte map / scaling from datasheet
+uint16_t pumpActualSpeed;  // actual pump speed (RPM)
+uint8_t  pumpStatus;       // status byte
+uint8_t  pumpFaults;       // fault byte
+uint16_t pumpSetpoint;     // commanded speed (RPM)
 uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
 uint32_t callback_cell_sample_start;
 uint32_t callback_cell_sample_finish = 0;
@@ -86,9 +205,58 @@ uint32_t callback_main_loop_start;
 uint32_t callback_main_loop_finish = 0;
 uint16_t rpm = 0;
 uint16_t power = 0;
-uint16_t throttle = 0;
+uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
+
+// EVWest dual pot throttle (OEM pedal) -- TODO: confirm pin assignments
+#define THROTTLE_POT1_PIN  A2   // TODO: confirm Teensy pin
+#define THROTTLE_POT2_PIN  A3   // TODO: confirm Teensy pin
+// Calibration endpoints in 12-bit ADC counts (0–4095) -- TODO: bench calibrate
+#define THROTTLE_POT1_MIN  100
+#define THROTTLE_POT1_MAX  3900
+#define THROTTLE_POT2_MIN  100
+#define THROTTLE_POT2_MAX  3900
+#define THROTTLE_PLAUSIBILITY_PCT 10  // max allowable % difference between pots
+uint16_t throttlePot1Raw;    // raw 12-bit ADC count, pot 1
+uint16_t throttlePot2Raw;    // raw 12-bit ADC count, pot 2
+bool     throttlePlausibility = true; // false = pots disagree → throttle forced to 0
 uint16_t groundSpeed = 0;
-uint16_t GPSaltitude = 0;
+uint32_t GPSaltitude = 0;
+uint8_t fixType;
+bool KL17state;
+
+uint16_t debounceDelay = 250;//debounce time (ms)
+uint8_t button_0x01_state;
+uint8_t button_0x02_state;
+uint8_t button_0x04_state;
+uint8_t button_0x08_state;
+uint8_t button_0x10_state;
+uint8_t button_0x20_state;
+uint8_t button_0x40_state;
+uint8_t button_0x80_state;
+uint8_t new_0x01_state;
+uint8_t new_0x02_state;
+uint8_t new_0x04_state;
+uint8_t new_0x08_state;
+uint8_t new_0x10_state;
+uint8_t new_0x20_state;
+uint8_t new_0x40_state;
+uint8_t new_0x80_state;
+uint8_t last_0x01_state;
+uint8_t last_0x02_state;
+uint8_t last_0x04_state;
+uint8_t last_0x08_state;
+uint8_t last_0x10_state;
+uint8_t last_0x20_state;
+uint8_t last_0x40_state;
+uint8_t last_0x80_state;
+uint8_t last_0x01_time;
+uint8_t last_0x02_time;
+uint8_t last_0x04_time;
+uint8_t last_0x08_time;
+uint8_t last_0x10_time;
+uint8_t last_0x20_time;
+uint8_t last_0x40_time;
+uint8_t last_0x80_time;
 
 char ReplyBuffer[] = "acknowledged";
 uint8_t displayBuffer[16];
@@ -122,17 +290,34 @@ void wakepMBB32();
 void shutdownpMBB32();
 
 void ReadDigitalStatuses();
-void ReadAnalogStatuses(); 
+void ReadAnalogStatuses();
+void linInit();
+void linReadValve();
+void linWriteValve(uint8_t position);
+void readThrottle();
 
+#ifdef TCP_Interface
 void SendCANFrameToClient(unsigned long canFrameId);
 //void SendTextExtensionFrameToEth(unsigned long canFrameId, const char* text);
 void sendTestData();
-
 void SendCANFramesToEth(EthernetClient& client);
 void forwardAsRD44Frame(packet_t *packet, EthernetClient client);
+#endif
+
 void initCANframes(CAN_message_t *, CAN_message_t *);
 
 void displayStatus();
+
+void check_KL15();
+void check_Drive();
+void Off_enter();
+void Off_exit();
+void Idle_enter();
+void Idle_exit();
+void Drive_enter();
+void Drive_exit();
+void Charge_enter();
+void Charge_exit();
 
 byte buf[8];
 
