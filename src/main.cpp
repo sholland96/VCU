@@ -1051,27 +1051,6 @@ void displayStatus() {
   tft.fillRect(110,95,100,30,ST77XX_BLUE);
   tft.println((float)batteryVoltage/100, 2);
 #endif
-/*
-  displayBuffer[0] = 0x44;
-  displayBuffer[1] = 0x33;
-  displayBuffer[2] = 0x22;
-  displayBuffer[3] = 0x11;
-  displayBuffer[4] = 0x00;
-  displayBuffer[5] = 0x00;
-  displayBuffer[6] = 0x0C;
-  displayBuffer[7] = 0x80;
-  displayBuffer[8] = rpm;//RPM = V
-  displayBuffer[9] = rpm>>8;
-  displayBuffer[10] = power*10;//kW = V/10
-  displayBuffer[11] = (power*10)>>8;
-  displayBuffer[12] = 21;//°C = V-100
-  displayBuffer[13] = 0;
-  displayBuffer[14] = throttle*10;//TPS = V/10
-  displayBuffer[15] = (throttle*10)>>8;
-
-  udpServer.beginPacket(targetIP, targetPort);
-  udpServer.write(displayBuffer, 16);
-  udpServer.endPacket();*/
   digitalWriteFast(6, LOW);
 }//end of displayStatus()
 #ifdef TCP_Interface

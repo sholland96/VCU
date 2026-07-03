@@ -32,8 +32,28 @@ Devices: pMBB32 battery management modules (×3), PDU-8 power distribution unit
 | `0xFF0000` | Extended | Start-of-measurement broadcast to all pMBB32s |
 | `0xCF0100 / 02 / 03` | Extended | Request min/max cells from pMBB32 #1 / #2 / #3 |
 | `0xAF0100 / 02 / 03` | Extended | Set mode / wakeup / shutdown to pMBB32 #1 / #2 / #3 |
-| `0x0A0620` | Extended | PDU-8 driver settings (channel current limits) |
-| `0x0A0630` | Extended | PDU-8 driver outputs (PWM duty cycles) |
+| `0x0A0620` | Extended | PDU-8 driver settings — channel current limits (sent every 62.5 ms) |
+| `0x0A0630` | Extended | PDU-8 driver outputs — channel PWM duty cycles *(disabled, unverified)* |
+
+**PDU-8 `0x0A0620` byte map** — current limit register: A ÷ 0.4 (e.g. 5 A → 0x0D, 2 A → 0x05, 0 = off)
+
+| Byte | Channel | Load | Active value |
+|------|---------|------|--------------|
+| 0 | CH1 | Negative contactor | 0x0D (5 A) when KL15 on, 0x00 off |
+| 1 | CH2 | pMBB32 modules | 0x05 (2 A) always |
+| 2 | CH3 | Positive pre-charge relay | 0x05 (2 A) during Idle pre-charge, 0x00 otherwise |
+| 3 | CH4 | Positive contactor | 0x0D (5 A) when KL15 on, 0x00 off |
+| 4–7 | — | Unused | 0x00 |
+
+**PDU-8 `0x0A0630` byte map** — PWM duty cycle (0x00–0xFF); only needed for current-controlled outputs
+
+| Byte | Channel | Load |
+|------|---------|------|
+| 0 | CH1 | Negative contactor |
+| 1 | CH2 | pMBB32 modules (init value 0xFE) |
+| 2 | CH3 | Positive pre-charge relay |
+| 3 | CH4 | Positive contactor |
+| 4–7 | — | Unused |
 
 **Received and decoded**
 

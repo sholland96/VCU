@@ -12,5 +12,6 @@
         "initializer_list": "cpp",
         "chrono": "cpp"
     },
-    "cmake.sourceDirectory": "C:/Google_Drive/PlatformIO/VCU/lib/teensy4_i2c-master"
+    "cmake.sourceDirectory": "C:/Google_Drive/PlatformIO/VCU/lib/teensy4_i2c-master",
+    "C_Cpp.dimInactiveRegions": false
 }
