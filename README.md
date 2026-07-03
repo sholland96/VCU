@@ -58,17 +58,56 @@ Devices: pMBB32 battery management modules (×3), PDU-8 power distribution unit
 
 ### CAN2 — 500 kbps
 
-Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU V2 *(placeholder)*, EMP WP29-12V-CV-A water pump *(placeholder)*
+Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU (v5 board), EMP WP29-12V-CV-A water pump
 
 **Transmitted (VCU → device)**
 
-| ID | Type | Description |
-|----|------|-------------|
-| `0x412` | Standard | IVT-MOD command (SET_MODE, configure measurements) |
-| `0xA100101` | Extended | SIM100MOD request command |
-| `0x7A00` | Extended | EMP WP29 pump speed setpoint |
-| `0x18EF2100` | Extended | CAN keypad LED color / mode command |
-| `0x19B` | Standard | OpenInverter LDU torque command *(stub, not yet active)* |
+| ID | Type | Rate | Description |
+|----|------|------|-------------|
+| `0x412` | Standard | on demand | IVT-MOD command (SET_MODE, configure measurements) |
+| `0xA100101` | Extended | 200 ms | SIM100MOD isolation poll |
+| `0x7A00` | Extended | 200 ms | EMP WP29 pump speed setpoint *(stub)* |
+| `0x18EF2100` | Extended | on demand | CAN keypad LED colour / mode command |
+| `0x201` | Standard | **10 ms** | OpenInverter LDU fixed safety frame (see below) |
+
+**OpenInverter LDU 0x201 frame — v5.32+ fixed bit-packed layout**
+
+```
+data[0] (bytes 0–3, little-endian uint32):
+  bits  0–11 : pot          throttle demand 0–4095
+  bits 12–23 : pot2         regen channel (0 = unused)
+  bits 24–29 : canio        6-bit digital IO field (see below)
+  bits 30–31 : ctr1         2-bit sequence counter
+
+data[1] (bytes 4–7, little-endian uint32):
+  bits  0–13 : cruisespeed  cruise target (0 = unused)
+  bits 14–15 : ctr2         must equal ctr1 every frame
+  bits 16–23 : regenpreset  regen % (0 = unused)
+  bits 24–31 : crc          optional CRC (set controlcheck=0 to disable)
+```
+
+canio bitfield:
+
+| Bit | Mask | Signal |
+|-----|------|--------|
+| 0 | `0x01` | cruise |
+| 1 | `0x02` | start / enable |
+| 2 | `0x04` | brake |
+| 3 | `0x08` | forward |
+| 4 | `0x10` | reverse |
+| 5 | `0x20` | bms |
+
+Safety: `ctr1` must equal `ctr2` and must differ from the previous frame's counter value. The inverter shuts down after 5 consecutive invalid frames or 500 ms of silence. The VCU sends every 10 ms.
+
+**One-time inverter terminal setup (run once, then `save`):**
+```
+potmode      2       enable CAN throttle
+potmin       0
+potmax       4095
+controlid    513     (= 0x201 decimal)
+controlcheck 0       disable CRC for now
+save
+```
 
 **Received (device → VCU)**
 
@@ -84,9 +123,9 @@ Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU V2 *(placeholder
 | `0x628` | 30 ms | IVT-MOD energy counter |
 | `0x18EFFF21` | 100 ms | CAN keypad button status |
 | `0xA100100` | on request | SIM100MOD isolation state / measurements |
-| `0x19A` | — | OpenInverter LDU status (speed, torque, temperature) *(placeholder)* |
-| `0x55A` | — | OpenInverter LDU faults *(placeholder)* |
-| `0xFBFE` | — | EMP WP29 pump actual speed / status *(placeholder)* |
+| `0x19A` | — | OpenInverter LDU status *(TODO: confirm ID from inverter `can tx` output)* |
+| `0x55A` | — | OpenInverter LDU faults *(TODO: confirm ID)* |
+| `0xFBFE` | — | EMP WP29 pump actual speed / status *(stub)* |
 
 ---
 
@@ -122,6 +161,29 @@ Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
 
 ---
 
+## Throttle Pipeline
+
+`readThrottle()` is called from `callback_t0()` every 10 ms. Five stages:
+
+| Stage | Action |
+|-------|--------|
+| **1 Read** | `analogRead(A2)` and `analogRead(A3)` |
+| **2 Verify** | Cross-check tracks within 5 %; mismatch → throttle = 0 |
+| **3 Arbitrate** | Brake pedal pressed → 0; IVT or SIM fault active → clamp to 20 % |
+| **4 Map** | Linear 1:1 pedal % → `LDUtorqueSetpoint` (0–100); zero outside Drive state |
+| **5 Transmit** | `callback_t0()` scales to 12-bit `pot` and packs into 0x201 frame |
+
+Key constants (`defines.h`):
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `THROTTLE_PLAUSIBILITY_PCT` | 5 | Max allowed % gap between track 1 and track 2 |
+| `THROTTLE_FAULT_LIMIT` | 20 | Max throttle % when IVT or SIM fault active |
+| `THROTTLE_POT1/2_MIN` | 100 | ADC count at idle — **bench calibrate** |
+| `THROTTLE_POT1/2_MAX` | 3900 | ADC count at full pedal — **bench calibrate** |
+
+---
+
 ## Pin Assignments
 
 | Pin | Function |
@@ -136,6 +198,7 @@ Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
 | 13 | Built-in LED (1 Hz heartbeat) |
 | A2 | Throttle pot 1 (EVWest dual-pot) |
 | A3 | Throttle pot 2 (EVWest dual-pot) |
+| TBD | Brake pedal switch (`BRAKE_PIN`) |
 | I2C | u-blox GNSS module |
 
 ---
@@ -154,35 +217,34 @@ Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
 |-------|-------------|
 | Off | Contactors disabled |
 | Idle | Pre-charge relay enabled; keypad LED amber blink; "KL15 on" SMS sent |
-| Drive | — *(drive logic TBD)* |
-| Charge | — *(charge logic TBD)* |
+| Drive | LDU start/forward/reverse controlled by keypad P/R/N/D buttons |
+| Charge | *(TBD)* |
 
 ---
 
 ## Periodic Tasks
 
-| Timer | Period | Work |
-|-------|--------|------|
-| t1 (RTC) | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update |
-| t2 (GPT1) | 200 ms | pMBB32 measurement broadcast; stale module wakeup; SIM100MOD isolation poll; LIN valve poll |
-| t3 (GPT2) | 1000 ms | Heartbeat LED toggle |
-| main loop | free-running | CAN event dispatch; GNSS processing; throttle ADC read; FSM step |
+| Timer | Hardware | Period | Work |
+|-------|----------|--------|------|
+| **t0** | PIT (IntervalTimer) | **10 ms** | Throttle pipeline (read/verify/arbitrate/map); assemble and send LDU 0x201 safety frame |
+| t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update |
+| t2 | GPT1 | 200 ms | pMBB32 measurement broadcast; stale module wakeup; SIM100MOD isolation poll; LIN valve poll |
+| t3 | GPT2 | 1000 ms | Heartbeat LED toggle |
+| main loop | — | free-running | CAN event dispatch; GNSS processing; FSM step |
+
+t0 runs at the highest ARM Cortex-M7 NVIC priority (`priority(0)`) and preempts all other work.
 
 ---
 
 ## Building
 
-Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Code and click **Build (✓)** in the PlatformIO toolbar, or use the PlatformIO terminal:
-
-```
-pio run
-```
+Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Code and click **Build (✓)** in the PlatformIO toolbar.
 
 ### Dependencies (auto-installed by PlatformIO)
 
 | Library | Purpose |
 |---------|---------|
-| `luni64/TeensyTimerTool` | Periodic timer callbacks |
+| `luni64/TeensyTimerTool` | Periodic timer callbacks (RTC, GPT1, GPT2) |
 | `sparkfun/SparkFun u-blox GNSS Arduino Library` | GNSS / GPS |
 | `ssilverman/QNEthernet` | Ethernet (reserved, not currently active) |
 | `jonblack/arduino-fsm` | Finite state machine |
@@ -192,10 +254,13 @@ pio run
 
 ## Placeholders / TODOs
 
-- **OpenInverter LDU V2** — confirm CAN IDs from device configuration page; implement torque command
+- **OpenInverter LDU v5** — run `can tx` in inverter terminal to confirm actual RX CAN IDs for status/fault frames; wire up `can2Sniff()` cases for `LDUrpm`, `LDUtorque`, `LDUmotorTemp`, etc.
+- **OpenInverter CRC** — implement `crc_calculate_block` equivalent and set `controlcheck 1` on inverter once formula is confirmed from stm32-sine source
+- **Brake pedal** — assign `BRAKE_PIN` in `defines.h` and uncomment `digitalRead(BRAKE_PIN)` in `readThrottle()`
+- **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` constants
 - **EMP WP29 pump** — confirm byte map from datasheet; implement speed setpoint loop
-- **BMW LIN valve** — confirm LIN node address and frame spec from BMW ISTA; implement write frame
-- **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` constants in `defines.h`
-- **LIN transceiver enable pin** — assign `LIN_EN_PIN` once hardware is finalised
-- **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check
-- **pMBB32 individual cell voltages** — broadcast frames are received but not yet decoded in `can1Sniff()`
+- **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
+- **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-MOD U2 (pre-charge voltage)
+- **Regen braking** — implement `pot2` / `regenpreset` fields in the LDU frame; wire to brake pressure or paddle
+- **pMBB32 individual cell voltages** — broadcast frames received but not decoded in `can1Sniff()`
+- **IVT fault detection** — populate `IVTfaultActive` in `can2Sniff()` when pack current or voltage is out of safe range

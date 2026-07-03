@@ -1,0 +1,57 @@
+CAN1 — 500 kbps (pMBB32, PDU-8)
+Transmitted (VCU → Device)
+ID	Type	Description
+0xFF0000	Extended	Start of measurement broadcast to all pMBB32s
+0xCF0100	Extended	Request min/max cells from pMBB32 #1
+0xCF0200	Extended	Request min/max cells from pMBB32 #2
+0xCF0300	Extended	Request min/max cells from pMBB32 #3
+0xAF0100	Extended	Set mode / wakeup / shutdown to pMBB32 #1
+0xAF0200	Extended	Set mode / wakeup / shutdown to pMBB32 #2
+0xAF0300	Extended	Set mode / wakeup / shutdown to pMBB32 #3
+0x0A0620	Extended	PDU-8 driver settings (channel current limits)
+0x0A0630	Extended	PDU-8 driver outputs (PWM duty cycles)
+Received (pMBB32 → VCU) — actively decoded
+ID	Type	Description
+0x18FF0E01	Extended	pMBB32 #1 min/max cell voltage report
+0x18FF0E02	Extended	pMBB32 #2 min/max cell voltage report
+0x18FF0E03	Extended	pMBB32 #3 min/max cell voltage report
+Received (pMBB32 → VCU) — defined in pMBB32.h but not yet decoded in can1Sniff
+ID Pattern	Description
+0x18FF01yy / 0x18FF07yy	Cells 1–4 voltages (low IC / high IC)
+0x18FF02yy / 0x18FF08yy	Cells 5–8 voltages
+0x18FF03yy / 0x18FF09yy	Cells 9–12 voltages
+0x18FF04yy / 0x18FF0Ayy	Cells 13–16 voltages
+0x18FF05yy / 0x18FF0Byy	Aux channel readings
+0x18FF06yy / 0x18FF0Cyy	PCB/die temperatures
+0x18FF0Fyy / 0x18FF10yy	Status registers
+0x18FF11yy / 0x18FF12yy	Cell OV/UV fault status
+(yy = module number 01, 02, 03)	
+CAN2 — 500 kbps (IVT-MOD, SIM100MOD, Keypad)
+Transmitted (VCU → Device)
+ID	Type	Description
+0x412	Standard	IVT-MOD command (SET_MODE, configure measurements)
+0xA100101	Extended	SIM100MOD request command
+Received (Device → VCU)
+ID	Type	Description
+0x621	Standard	IVT-MOD current (20 ms)
+0x622	Standard	IVT-MOD pack voltage U1 (60 ms)
+0x623	Standard	IVT-MOD pre-charge voltage U2 (60 ms)
+0x624	Standard	IVT-MOD voltage U3 (60 ms)
+0x625	Standard	IVT-MOD temperature (200 ms)
+0x626	Standard	IVT-MOD power (30 ms)
+0x627	Standard	IVT-MOD coulomb counter (30 ms)
+0x628	Standard	IVT-MOD energy counter (30 ms)
+0x18EFFF21	Extended	CAN keypad button status (100 ms)
+0xA100100	Extended	SIM100MOD isolation state/measurement response
+0x000A0610	Extended	Received but not yet handled
+CAN3 — 1 Mbps (Wireless Gateway, RealDash)
+Transmitted (VCU → RealDash/Gateway)
+ID	Type	Description
+0xC79	Standard	SMS command to wireless gateway
+0xC80	Standard	RPM, power, temperature, throttle (every 62.5 ms)
+0xC81	Standard	Pack voltage, pack current, 12V battery voltage
+0xC82	Standard	Highest/lowest cell voltage, ground speed, GPS altitude
+0xC83	Standard	Cell delta voltage, SIM100MOD isolation, SIM100MOD temp, GPS fix type
+Received (RealDash/Gateway → VCU)
+ID	Type	Description
+0x1F4 (500 decimal)	Standard	Received but not yet handled

@@ -13,9 +13,10 @@
 //SnoozeBlock config_teensy40(alarm);
 
 using namespace TeensyTimerTool;
-PeriodicTimer t1(RTC); // generate a timer from the pool (Pool: 2xGPT, 16xTMR(QUAD), 20xTCK)
-PeriodicTimer t2(GPT1); // generate a timer from the pool (Pool: 2xGPT, 16xTMR(QUAD), 20xTCK)
-PeriodicTimer t3(GPT2); // generate a timer from the pool (Pool: 2xGPT, 16xTMR(QUAD), 20xTCK)
+IntervalTimer  t0;       // PIT channel — 10ms LDU torque command (highest priority)
+PeriodicTimer t1(RTC);  // 62.5ms — PDU-8 keepalive, pMBB32 cell poll, RealDash update
+PeriodicTimer t2(GPT1); // 200ms  — pMBB32 measurement broadcast, SIM100MOD, LIN valve
+PeriodicTimer t3(GPT2); // 1000ms — heartbeat LED
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can1;// 500KHz - pMMB32, PDU-8  
 FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_16> can2;// 500KHz - LDU, EVCC, SIM100MOD, IVT-MOD, EMP W29, keypad
@@ -26,6 +27,7 @@ CAN_message_t msg2;
 CAN_message_t msg3;
 CAN_message_t PDUmsg1;
 CAN_message_t PDUmsg2;
+CAN_message_t LDUmsg;      // 0x201: pot (bytes 0-1) + canio (byte 4), sent every 10ms
 
 // Used pins
 #define LED_PIN 13
@@ -48,6 +50,54 @@ State state_Drive(&Drive_enter, &check_Drive, &Idle_exit);
 State state_Charge(&Charge_enter, &check_Drive, &Idle_exit);
 Fsm fsm(&state_Off);
 
+/* t0 Callback — 10ms LDU fixed safety frame (IntervalTimer / PIT, highest priority)
+ *
+ * Sends the v5.32+ fixed control frame on 0x201 every 10ms.
+ * OpenInverter shuts down after 5 consecutive invalid frames or 500ms silence.
+ *
+ * Bit packing (little-endian within each 32-bit word):
+ *   buf[0]     = pot[7:0]
+ *   buf[1]     = pot[11:8] | pot2[3:0]<<4
+ *   buf[2]     = pot2[11:4]
+ *   buf[3]     = canio[5:0] | ctr1[1:0]<<6
+ *   buf[4]     = cruisespeed[7:0]          (0, not used)
+ *   buf[5]     = cruisespeed[13:8] | ctr2[1:0]<<6   (ctr2 must == ctr1)
+ *   buf[6]     = regenpreset[7:0]          (0, not used)
+ *   buf[7]     = crc                       (0, controlcheck=0 on inverter)
+ */
+void callback_t0() {
+  readThrottle(); // steps 1–4: updates LDUtorqueSetpoint (0-100)
+
+  // Scale throttle to 12-bit pot value (potmax=4095 on inverter)
+  uint16_t pot = (uint16_t)((uint32_t)LDUtorqueSetpoint * 4095 / 100);
+
+  // Build canio 6-bit field
+  uint8_t canio = 0;
+  if (VCUstate == VCU_STATE_DRIVE) {
+    canio |= LDU_CANIO_START;
+    if (LDUdirection == LDU_DIR_FORWARD) canio |= LDU_CANIO_FORWARD;
+    if (LDUdirection == LDU_DIR_REVERSE) canio |= LDU_CANIO_REVERSE;
+  }
+  if (brakePedal) canio |= LDU_CANIO_BRAKE;
+
+  // Advance 2-bit sequence counter (must differ from the previous frame's value)
+  LDUseqCounter = (LDUseqCounter + 1) & 0x03;
+  uint8_t ctr = LDUseqCounter;
+
+  // Pack data[0]: pot(12) | pot2(12) | canio(6) | ctr1(2)
+  LDUmsg.buf[0] = pot & 0xFF;
+  LDUmsg.buf[1] = ((pot >> 8) & 0x0F);          // pot2 = 0, upper nibble stays 0
+  LDUmsg.buf[2] = 0;                             // pot2 high byte = 0
+  LDUmsg.buf[3] = (canio & 0x3F) | (ctr << 6);
+
+  // Pack data[1]: cruisespeed(14)=0 | ctr2(2) | regenpreset(8)=0 | crc(8)=0
+  LDUmsg.buf[4] = 0;
+  LDUmsg.buf[5] = ctr << 6;                      // ctr2 must equal ctr1
+  LDUmsg.buf[6] = 0;
+  LDUmsg.buf[7] = 0;                             // CRC disabled (controlcheck=0)
+  can2.write(LDUmsg);
+}
+
 /* t1 Callback
 * This runs every 62.5ms. 
 * Tasks performed here:
@@ -58,17 +108,17 @@ Fsm fsm(&state_Off);
 void callback_t1() {//send PDU-8 driver settings every t1 period
   //send PDU-8 driver settings every t1 period (125ms)
   can1.write(PDUmsg1);
-  delay(1);
+  //delay(1);
   //can1.write(PDUmsg2);
   //delay(1);
   msg1.flags.extended = 1;
   switch (counter) {
-    case 1: 
+    case 1:
       msg1.id = 0xCF0100;//request min/max cells
       msg1.len = 0;
       can1.write(msg1);
-      delay(1);
-      msg1.id = 0xAF0100; 
+      //delay(1);
+      msg1.id = 0xAF0100;
       msg1.len = 3;
       msg1.buf[0] = 0x01;
       msg1.buf[1] = 0x10;
@@ -79,8 +129,8 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
       msg1.id = 0xCF0200;//request min/max cells
       msg1.len = 0;
       can1.write(msg1);
-      delay(1);
-      msg1.id = 0xAF0200; 
+      //delay(1);
+      msg1.id = 0xAF0200;
       msg1.len = 3;
       msg1.buf[0] = 0x01;
       msg1.buf[1] = 0x10;
@@ -92,8 +142,8 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
       msg1.id = 0xCF0300;//request min/max cells
       msg1.len = 0;
       can1.write(msg1);
-      delay(1);
-      msg1.id = 0xAF0300; 
+      //delay(1);
+      msg1.id = 0xAF0300;
       msg1.len = 3;
       msg1.buf[0] = 0x01;
       msg1.buf[1] = 0x10;
@@ -102,7 +152,7 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
       break;
   }
   counter++;
-  delay(1);
+  //delay(1);
   if (VCUstate == VCU_STATE_IDLE || VCUstate == VCU_STATE_DRIVE)
     displayStatus();//update RealDash
 }//end of callback_cells_pdu()
@@ -124,7 +174,7 @@ void callback_t2() {
   msg1.flags.extended = 1;
   msg1.len = 0;
   can1.write(msg1);  //send sample command every 1 second
-  delay(1);
+  //delay(1);
   // Invalidate data from any pMBB32 that has not responded within 200ms
   {
     uint32_t now = millis();
@@ -177,27 +227,27 @@ void callback_t2() {
     msg1.buf[1] = 0x10;
     msg1.buf[2] = 0x2;
     can1.write(msg1);
-    delay(1);
+    //delay(1);
   }
   if(pMBB32stale2 > 50){
     //send wakeup to pMBB32 #2
-    msg1.id = 0xAF0200; 
+    msg1.id = 0xAF0200;
     msg1.len = 3;
     msg1.buf[0] = 0x01;
     msg1.buf[1] = 0x10;
     msg1.buf[2] = 0x2;
     can1.write(msg1);
-    delay(1);
+    //delay(1);
   }
   if(pMBB32stale3 > 50){
     //send wakeup to pMBB32 #3
-    msg1.id = 0xAF0300; 
+    msg1.id = 0xAF0300;
     msg1.len = 3;
     msg1.buf[0] = 0x01;
     msg1.buf[1] = 0x10;
     msg1.buf[2] = 0x2;
     can1.write(msg1);
-    delay(1);
+    //delay(1);
   }
 
   msg2.id = 0xA100101;//send SIM100MOD Request Isolation State command
@@ -205,7 +255,7 @@ void callback_t2() {
   msg2.len = 1;
   msg2.buf[0] = 0xE0;//request isolation state
   can2.write(msg2);
-  delay(2); 
+  //delay(2);
   /*
   msg2.buf[0] = 0xE1;//request isolation resistances
   can2.write(msg2);
@@ -224,7 +274,7 @@ void callback_t2() {
   delay(2); */
   msg2.buf[0] = 0x80;//request temperature
   can2.write(msg2);
-  delay(1);
+  //delay(1);
 
   linReadValve();//poll BMW changeover valve over LIN (Serial3)
 
@@ -459,6 +509,7 @@ void can2Sniff(const CAN_message_t &msg) {
               // if the button state has changed:
               if (new_0x01_state != button_0x01_state) {
                 button_0x01_state = new_0x01_state;
+                LDUdirection = LDU_DIR_STOP;
                 Serial.println("BTN: Park");
               }
             }            
@@ -477,6 +528,7 @@ void can2Sniff(const CAN_message_t &msg) {
               // if the button state has changed:
               if (new_0x02_state != button_0x02_state) {
                 button_0x02_state = new_0x02_state;
+                LDUdirection = LDU_DIR_REVERSE;
                 Serial.println("BTN: Reverse");
               }
             }            
@@ -495,6 +547,7 @@ void can2Sniff(const CAN_message_t &msg) {
               // if the button state has changed:
               if (new_0x04_state != button_0x04_state) {
                 button_0x04_state = new_0x04_state;
+                LDUdirection = LDU_DIR_NEUTRAL;
                 Serial.println("BTN: Neutral");
               }
             }           
@@ -513,6 +566,7 @@ void can2Sniff(const CAN_message_t &msg) {
               // if the button state has changed:
               if (new_0x08_state != button_0x08_state) {
                 button_0x08_state = new_0x08_state;
+                LDUdirection = LDU_DIR_FORWARD;
                 Serial.println("BTN: Drive");
               }
             }              
@@ -729,6 +783,11 @@ void initCAN (int CAN1baud, int CAN2baud, int CAN3baud) {
   PDUmsg2.buf[5] = 0;
   PDUmsg2.buf[6] = 0;
   PDUmsg2.buf[7] = 0;
+
+  LDUmsg.id = LDU_CMD_ID;     // 0x201 — fixed safety frame, 10ms
+  LDUmsg.flags.extended = 0;
+  LDUmsg.len = 8;
+  memset(LDUmsg.buf, 0, 8);
 
   can1.begin();
   can1.setBaudRate(CAN1baud);
@@ -1053,33 +1112,7 @@ void printPVTdata(UBX_NAV_PVT_data_t *ubxDataStruct)
 {
     //Serial.println();
 
-    //Serial.print(F("Time: ")); // Print the time
-    uint8_t hms = ubxDataStruct->hour; // Print the hours
-    //if (hms < 10) Serial.print(F("0")); // Print a leading zero if required
-    //Serial.print(hms);
-    //Serial.print(F(":"));
-    hms = ubxDataStruct->min; // Print the minutes
-    //if (hms < 10) Serial.print(F("0")); // Print a leading zero if required
-    //Serial.print(hms);
-    //Serial.print(F(":"));
-    hms = ubxDataStruct->sec; // Print the seconds
-    //if (hms < 10) Serial.print(F("0")); // Print a leading zero if required
-    //Serial.print(hms);
-    //Serial.print(F("."));
-    unsigned long millisecs = ubxDataStruct->iTOW % 1000; // Print the milliseconds
-    //if (millisecs < 100) Serial.print(F("0")); // Print the trailing zeros correctly
-    //if (millisecs < 10) Serial.print(F("0"));
-    //Serial.print(millisecs);
-
-    long latitude = ubxDataStruct->lat; // Print the latitude
-    //Serial.print(F(" Lat: "));
-    //Serial.print(latitude);
-
-    long longitude = ubxDataStruct->lon; // Print the longitude
-    //Serial.print(F(" Long: "));
-    //Serial.print(longitude);
-    //Serial.print(F(" (degrees * 10^-7)"));
-
+    // TODO: re-enable Serial printing once display/logging is implemented
     GPSaltitude = ubxDataStruct->hMSL; // Print the height above mean sea level
     //Serial.print(F(" Height above MSL: "));
     //Serial.print(GPSaltitude);
@@ -1299,14 +1332,30 @@ void linWriteValve(uint8_t position) {
  *       throttle = 100 override in displayStatus().
  */
 void readThrottle() {
+  // ── 1. READ ─────────────────────────────────────────────────────────────
   throttlePot1Raw = analogRead(THROTTLE_POT1_PIN);
   throttlePot2Raw = analogRead(THROTTLE_POT2_PIN);
 
+  // ── 2. VERIFY — 5 % plausibility window between tracks ──────────────────
   uint16_t pct1 = constrain(map(throttlePot1Raw, THROTTLE_POT1_MIN, THROTTLE_POT1_MAX, 0, 100), 0, 100);
   uint16_t pct2 = constrain(map(throttlePot2Raw, THROTTLE_POT2_MIN, THROTTLE_POT2_MAX, 0, 100), 0, 100);
+  throttlePlausibility = (abs((int16_t)pct1 - (int16_t)pct2) <= THROTTLE_PLAUSIBILITY_PCT);
+  uint16_t pedalPct = throttlePlausibility ? pct1 : 0; // track 1 primary; fault → 0
 
-  throttlePlausibility = abs((int16_t)pct1 - (int16_t)pct2) <= THROTTLE_PLAUSIBILITY_PCT;
-  throttle = throttlePlausibility ? pct1 : 0;
+  // ── 3. ARBITRATE ─────────────────────────────────────────────────────────
+  // brakePedal = digitalRead(BRAKE_PIN); // TODO: assign BRAKE_PIN, then uncomment
+  bool faultActive = IVTfaultActive || (SIMM100MODerrorFlags != 0);
+
+  if (!throttlePlausibility || brakePedal) {
+    pedalPct = 0;                                          // hard zero on sensor fault or brake
+  } else if (faultActive) {
+    pedalPct = min(pedalPct, (uint16_t)THROTTLE_FAULT_LIMIT); // limit to safe ceiling
+  }
+  throttle = pedalPct;
+
+  // ── 4. MAP — linear 1:1 (TODO: replace with torque/slip curve) ───────────
+  // Result written to LDUtorqueSetpoint (0-100); callback_t0 transmits on 0x201.
+  LDUtorqueSetpoint = (VCUstate == VCU_STATE_DRIVE) ? (int16_t)pedalPct : 0;
 }
 
 /* Setup */
@@ -1331,6 +1380,9 @@ void setup() {
   initCAN(500000, 500000, 1000000);//start CAN1, CAN2, CAN3 at 500kbps, 500kbps, 1Mbps
   delay(100);
 
+  t0.begin(callback_t0, 10000); // 10ms LDU torque command loop
+  t0.priority(0);               // highest priority on ARM Cortex-M7 (0=highest, 255=lowest)
+
 #ifndef TFT240_240_display
   pinMode(LED_BUILTIN, OUTPUT);//built-in LED or 240x240 TFT backlight
 #else
@@ -1341,6 +1393,7 @@ void setup() {
 #ifdef UBLOX_GNSS
   Wire.setClock(400 * 1000);//for U-blox GPS
   Wire.begin();
+  Wire.setTimeout(5);              // 5ms transaction timeout (I2CDriverWire API)
   
   while (myGNSS.begin() == false)
   {
@@ -1561,8 +1614,7 @@ void loop() {
   can2.events();//Call to look for any input
   //can3.events();//Output only
 
-  readThrottle();
- 
+  // readThrottle() is called from callback_t0() at precise 10ms intervals
     //Serial.println("Shutting down");
     // test shutdown and wake
     //shutdownpMBB32();
@@ -1577,8 +1629,9 @@ void loop() {
 
 
 #ifdef UBLOX_GNSS
-  myGNSS.checkUblox(); //See if new data is available. Process bytes as they come in
-  myGNSS.checkCallbacks(); // Check if any callbacks are waiting to be processed
+  myGNSS.checkUblox();    // returns on error if bus times out (5ms cap via setTimeout)
+  myGNSS.checkCallbacks();
+  // I2CDriverWire has no timeout-flag API; timeout errors surface as transaction failures
 #endif
 
 fsm.run_machine();

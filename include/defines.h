@@ -170,16 +170,68 @@ uint8_t SIMM100MODerrorFlags;
 uint32_t SIM100MODtemp;
 uint16_t batteryVoltage;
 
-// OpenInverter Tesla LDU V2 (CAN2 @ 500kbps) -- TODO: confirm IDs from device config page
-// TX to LDU:   0x19B  torque command (sent periodically)
-// RX from LDU: 0x19A  status, 0x55A faults
-int32_t  LDUrpm;           // motor speed (RPM)
-int16_t  LDUtorque;        // actual torque (Nm)
-int16_t  LDUmotorTemp;     // motor temperature (°C * 10)
-int16_t  LDUinverterTemp;  // inverter temperature (°C * 10)
-uint16_t LDUdcVoltage;     // DC bus voltage (V * 10)
-uint16_t LDUstatus;        // status bitfield
-uint16_t LDUfaults;        // fault bitfield
+// OpenInverter Tesla LDU V2 (CAN2 @ 500kbps)
+//
+// From firmware v5.32 the control frame has a FIXED bit-packed layout (not
+// freely mappable). Configure the inverter terminal once:
+//   potmode    2       (enable CAN throttle)
+//   potmin     0
+//   potmax     4095
+//   controlid  513     (= 0x201 in decimal)
+//   controlcheck 0     (disable CRC — implement later)
+//   save
+//
+// Fixed control frame layout (8 bytes, little-endian packed):
+//   data[0] bits  0-11 : pot          (12-bit throttle, 0-4095)
+//   data[0] bits 12-23 : pot2         (12-bit regen channel, 0 = not used)
+//   data[0] bits 24-29 : canio        (6-bit digital IO, see below)
+//   data[0] bits 30-31 : ctr1         (2-bit sequence counter)
+//   data[1] bits  0-13 : cruisespeed  (14-bit, 0 = not used)
+//   data[1] bits 14-15 : ctr2         (must equal ctr1 every frame)
+//   data[1] bits 16-23 : regenpreset  (8-bit regen %, 0 = not used)
+//   data[1] bits 24-31 : crc          (8-bit, ignored when controlcheck=0)
+//
+// canio bits (6-bit field, bits 24-29 of data[0]):
+//   bit 0 (0x01) = cruise
+//   bit 1 (0x02) = start / enable
+//   bit 2 (0x04) = brake
+//   bit 3 (0x08) = forward
+//   bit 4 (0x10) = reverse
+//   bit 5 (0x20) = bms
+//
+// Safety: ctr1 must equal ctr2 AND differ from the previous frame's counter.
+// After 5 consecutive invalid frames the inverter shuts down.
+// t0 increments the counter each 10ms tick — well within the 500ms timeout.
+//
+// RX from LDU: TODO confirm actual IDs from inverter 'can tx' terminal output
+#define LDU_CMD_ID          0x201
+
+// canio 6-bit field definitions
+#define LDU_CANIO_CRUISE    (1 << 0)
+#define LDU_CANIO_START     (1 << 1)
+#define LDU_CANIO_BRAKE     (1 << 2)
+#define LDU_CANIO_FORWARD   (1 << 3)
+#define LDU_CANIO_REVERSE   (1 << 4)
+#define LDU_CANIO_BMS       (1 << 5)
+
+// Internal direction state (set by keypad, translated to canio bits at transmit)
+#define LDU_DIR_NEUTRAL     0
+#define LDU_DIR_FORWARD     1
+#define LDU_DIR_REVERSE     2
+#define LDU_DIR_STOP        3
+
+int32_t  LDUrpm;                    // motor speed (RPM)
+int16_t  LDUtorque;                 // actual torque (Nm)
+int16_t  LDUtorqueSetpoint = 0;     // throttle demand 0–100 % — written by readThrottle(), read by t0
+int16_t  LDUspeedLimit     = 6000;  // max RPM — TODO: map via separate CAN rx if needed
+int16_t  LDUregenLimit     = 0;     // regen limit — TODO: implement
+uint8_t  LDUdirection      = LDU_DIR_NEUTRAL; // internal direction state, set by keypad
+uint8_t  LDUseqCounter     = 0;     // 2-bit sequence counter; incremented each t0 tick
+int16_t  LDUmotorTemp;              // motor temperature (°C × 10)
+int16_t  LDUinverterTemp;           // inverter temperature (°C × 10)
+uint16_t LDUdcVoltage;              // DC bus voltage (V × 10)
+uint16_t LDUstatus;                 // status bitfield
+uint16_t LDUfaults;                 // fault bitfield
 
 // BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial3 (RX3=pin7, TX3=pin8)
 // TODO: confirm LIN node ID and full frame spec from BMW service docs
@@ -207,18 +259,22 @@ uint16_t rpm = 0;
 uint16_t power = 0;
 uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
 
-// EVWest dual pot throttle (OEM pedal) -- TODO: confirm pin assignments
-#define THROTTLE_POT1_PIN  A2   // TODO: confirm Teensy pin
-#define THROTTLE_POT2_PIN  A3   // TODO: confirm Teensy pin
+// EVWest dual pot throttle (OEM pedal)
+#define THROTTLE_POT1_PIN       A2    // TODO: confirm Teensy pin
+#define THROTTLE_POT2_PIN       A3    // TODO: confirm Teensy pin
 // Calibration endpoints in 12-bit ADC counts (0–4095) -- TODO: bench calibrate
-#define THROTTLE_POT1_MIN  100
-#define THROTTLE_POT1_MAX  3900
-#define THROTTLE_POT2_MIN  100
-#define THROTTLE_POT2_MAX  3900
-#define THROTTLE_PLAUSIBILITY_PCT 10  // max allowable % difference between pots
-uint16_t throttlePot1Raw;    // raw 12-bit ADC count, pot 1
-uint16_t throttlePot2Raw;    // raw 12-bit ADC count, pot 2
-bool     throttlePlausibility = true; // false = pots disagree → throttle forced to 0
+#define THROTTLE_POT1_MIN       100
+#define THROTTLE_POT1_MAX       3900
+#define THROTTLE_POT2_MIN       100
+#define THROTTLE_POT2_MAX       3900
+#define THROTTLE_PLAUSIBILITY_PCT 5   // max allowable % difference between tracks
+#define THROTTLE_FAULT_LIMIT    20    // max throttle % permitted when IVT or SIM fault active
+// #define BRAKE_PIN            ??    // TODO: assign Teensy pin for brake pedal switch
+uint16_t throttlePot1Raw;             // raw 12-bit ADC count, track 1
+uint16_t throttlePot2Raw;             // raw 12-bit ADC count, track 2
+bool     throttlePlausibility = true; // false = tracks disagree → throttle forced to 0
+bool     brakePedal           = false;// true when brake pedal is pressed
+bool     IVTfaultActive       = false;// set in can2Sniff on overcurrent / overvoltage
 uint16_t groundSpeed = 0;
 uint32_t GPSaltitude = 0;
 uint8_t fixType;
