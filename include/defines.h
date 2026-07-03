@@ -84,9 +84,12 @@ ST7789_t3 tft = ST7789_t3(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 #endif
 
 #ifdef UBLOX_GNSS
-#include <i2c_driver_wire.h> //Needed for I2C to GNSS
+#include <i2c_driver_wire.h>
+#include <SparkFun_u-blox_GNSS_Arduino_Library.h>
 
-#include <SparkFun_u-blox_GNSS_Arduino_Library.h> //Click here to get the library: http://librarymanager/All#SparkFun_u-blox_GNSS
+// SK Pang board: NEO-M8M GNSS on I2C0 — Wire (SDA=pin 18, SCL=pin 19)
+// 1PPS output from NEO-M8M is routed to Teensy pin 35 on the SK Pang board.
+#define GPS_PPS_PIN   35
 
 SFE_UBLOX_GNSS myGNSS;
 #endif
@@ -233,7 +236,9 @@ uint16_t LDUdcVoltage;              // DC bus voltage (V × 10)
 uint16_t LDUstatus;                 // status bitfield
 uint16_t LDUfaults;                 // fault bitfield
 
-// BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial3 (RX3=pin7, TX3=pin8)
+// BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial3
+// Serial3 hardware pins on Teensy 4.1: TX3=pin14 (A0), RX3=pin15 (A1)
+// SK Pang board GNSS UART is on Serial2 (pins 7/8) — Serial3 is free for LIN.
 // TODO: confirm LIN node ID and full frame spec from BMW service docs
 #define LIN_BAUD      19200     // LIN 2.x
 #define LIN_VALVE_ID  0x10      // TODO: confirm BMW LIN node address
@@ -260,8 +265,8 @@ uint16_t power = 0;
 uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
 
 // EVWest dual pot throttle (OEM pedal)
-#define THROTTLE_POT1_PIN       A2    // TODO: confirm Teensy pin
-#define THROTTLE_POT2_PIN       A3    // TODO: confirm Teensy pin
+#define THROTTLE_POT1_PIN       A14
+#define THROTTLE_POT2_PIN       A15
 // Calibration endpoints in 12-bit ADC counts (0–4095) -- TODO: bench calibrate
 #define THROTTLE_POT1_MIN       100
 #define THROTTLE_POT1_MAX       3900
@@ -269,7 +274,8 @@ uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by dis
 #define THROTTLE_POT2_MAX       3900
 #define THROTTLE_PLAUSIBILITY_PCT 5   // max allowable % difference between tracks
 #define THROTTLE_FAULT_LIMIT    20    // max throttle % permitted when IVT or SIM fault active
-// #define BRAKE_PIN            ??    // TODO: assign Teensy pin for brake pedal switch
+#define BRAKE_PIN               A17
+#define BRAKE_THRESHOLD         200   // ADC counts (0–4095) — TODO: bench calibrate
 uint16_t throttlePot1Raw;             // raw 12-bit ADC count, track 1
 uint16_t throttlePot2Raw;             // raw 12-bit ADC count, track 2
 bool     throttlePlausibility = true; // false = tracks disagree → throttle forced to 0

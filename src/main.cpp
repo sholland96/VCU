@@ -1343,7 +1343,7 @@ void readThrottle() {
   uint16_t pedalPct = throttlePlausibility ? pct1 : 0; // track 1 primary; fault → 0
 
   // ── 3. ARBITRATE ─────────────────────────────────────────────────────────
-  // brakePedal = digitalRead(BRAKE_PIN); // TODO: assign BRAKE_PIN, then uncomment
+  brakePedal = (analogRead(BRAKE_PIN) > BRAKE_THRESHOLD);
   bool faultActive = IVTfaultActive || (SIMM100MODerrorFlags != 0);
 
   if (!throttlePlausibility || brakePedal) {

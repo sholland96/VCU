@@ -9,11 +9,13 @@ Built with PlatformIO / Arduino framework.
 
 | Item | Detail |
 |------|--------|
+| Carrier board | SK Pang Electronics Teensy 4.1 Triple CAN Board with ETH and u-blox NEO-M8M GNSS |
 | MCU | PJRC Teensy 4.1 (ARM Cortex-M7 @ 600 MHz) |
-| CAN | FlexCAN_T4 — three independent buses |
-| LIN | Serial3 (RX3=pin 7, TX3=pin 8) via external transceiver |
-| GNSS | u-blox module on I2C (400 kHz) |
-| Throttle | EVWest dual-pot (OEM pedal) on A2 / A3 |
+| CAN | FlexCAN_T4 — two classic CAN + one CAN FD |
+| LIN | Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) — GNSS UART is on Serial2, no conflict |
+| GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
+| Throttle | EVWest dual-pot (OEM pedal) on A14 / A15 |
+| Brake | Brake pressure sensor on A17 |
 
 ---
 
@@ -193,13 +195,15 @@ Key constants (`defines.h`):
 | 4 | CAN1 RX timing debug output |
 | 5 | CAN2 RX timing debug output |
 | 6 | Display timing debug output |
-| 7 (RX3) | LIN bus RX |
-| 8 (TX3) | LIN bus TX |
+| 14 (TX3 / A0) | LIN bus TX |
+| 15 (RX3 / A1) | LIN bus RX |
 | 13 | Built-in LED (1 Hz heartbeat) |
-| A2 | Throttle pot 1 (EVWest dual-pot) |
-| A3 | Throttle pot 2 (EVWest dual-pot) |
-| TBD | Brake pedal switch (`BRAKE_PIN`) |
-| I2C | u-blox GNSS module |
+| 18 (SDA) | GNSS I2C data — Wire / I2C0 |
+| 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
+| 35 (D35) | GNSS 1PPS (`GPS_PPS_PIN`) — blue LED indicator on SK Pang board |
+| A14 (pin 38) | Throttle pot 1 (EVWest dual-pot) |
+| A15 (pin 39) | Throttle pot 2 (EVWest dual-pot) |
+| A17 (pin 41) | Brake pedal pressure sensor (`BRAKE_PIN`) |
 
 ---
 
@@ -256,7 +260,7 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 
 - **OpenInverter LDU v5** — run `can tx` in inverter terminal to confirm actual RX CAN IDs for status/fault frames; wire up `can2Sniff()` cases for `LDUrpm`, `LDUtorque`, `LDUmotorTemp`, etc.
 - **OpenInverter CRC** — implement `crc_calculate_block` equivalent and set `controlcheck 1` on inverter once formula is confirmed from stm32-sine source
-- **Brake pedal** — assign `BRAKE_PIN` in `defines.h` and uncomment `digitalRead(BRAKE_PIN)` in `readThrottle()`
+- **Brake calibration** — bench-calibrate `BRAKE_THRESHOLD` (currently 200 / 4095 ADC counts) against actual sensor output
 - **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` constants
 - **EMP WP29 pump** — confirm byte map from datasheet; implement speed setpoint loop
 - **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
