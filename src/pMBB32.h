@@ -21,19 +21,23 @@
 #define comparatorUVlowByte = 6;
 #define comparatorUVhighByte = 7;
 
-// 0x00AFxx00 set mode command, no response frame - command byte 0
-#define wakeup 0x01
-#define sendCommClear 0x02
-#define sendCommReset 0x03
-#define sendOVUVthresholds 0x04
+// 0x00AFxx00 set mode command, no response frame
+// byte 0: command type
+#define wakeup               0x01  // power-on / keep-alive (no channel count byte)
+#define sendCommClear        0x02
+#define numberOfDevices      0x02  // number of AFE on each pMBB32
+#define sendCommReset        0x03
+#define sendOVUVthresholds   0x04
 // bytes 1 and 2, cell OV threshold: 4.2V/5/2^16 = 55050 = 0xD70A (default is 4.199V = 0xD709)
 // bytes 3 and 4, cell UV threshold: 2.5V/5/2^16 = 32768 = 0x8000 (default)
 // byte 5, comparator OV threshold: default is 4.3V = 0xB8
 // byte 6, comparator UV threshold: default is 2.4V = 0x88, 2.8V = 0xA8
-#define sendCANid 0x0F
-#define contReportingEnable 0x10
+#define sendCANid            0x0F
+#define contReportingEnable  0x10  // 1-byte command: enable continuous cell voltage broadcast
 #define contReportingDisable 0x11
-#define shutdown 0x55
+#define shutdown             0x55
+// byte 1 when cmd = contReportingEnable: number of channels
+#define channelCount16       0x10  // 16-cell module
 
 // 0x00CFxx00 min/max cells command, response frame 0x18FF0Eyy byte definitions
 #define minCellNum 0

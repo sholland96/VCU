@@ -31,23 +31,33 @@ CAN_message_t LDUmsg;      // 0x201: pot (bytes 0-1) + canio (byte 4), sent ever
 
 // Used pins
 #define LED_PIN 13
-#define KL15_PIN 2
+#define KLR_PIN 2  // physical key position 1 (accessory) — wakes hardware, no FSM role
 
-//Events
-#define KL15_ON 1
-#define KL15_OFF 2
-#define KL17_ON 1
-#define KL17_OFF 2
-#define DRIVE_ON 1
-#define DRIVE_OFF 2
-#define CHARGE_ON 1
-#define CHARGE_OFF 2
+// FSM events — unique integers required by arduino-fsm
+#define KL15_ON          1
+#define KL15_OFF         2
+#define DRIVE_ON         3
+#define DRIVE_OFF        4
+#define CHARGE_ON        5
+#define CHARGE_OFF       6
+#define PRECHARGE_OK     7
+#define PRECHARGE_CHARGE 8  // pre-charge succeeded via EVCC path → go to Charge
+#define PRECHARGE_FAIL   9
+#define FAULT_EV         10
+#define FAULT_CLEAR      11
+#define TEMP_LOW         12
+#define TEMP_HIGH        13
+#define TEMP_OK          14
 
 VCUStateEnum VCUstate = VCU_STATE_OFF;
 State state_Off(&Off_enter, &check_KL15, &Off_exit);
-State state_Idle(&Idle_enter, &check_KL15, &Idle_exit);
-State state_Drive(&Drive_enter, &check_Drive, &Idle_exit);
-State state_Charge(&Charge_enter, &check_Drive, &Idle_exit);
+State state_PreCharge(&PreCharge_enter, &check_PreCharge, &PreCharge_exit);
+State state_Idle(&Idle_enter, &check_Idle, &Idle_exit);
+State state_Drive(&Drive_enter, &check_DriveState, &Drive_exit);
+State state_Charge(&Charge_enter, &check_Charge, &Charge_exit);
+State state_HeatPack(&HeatPack_enter, &check_HeatPack, &HeatPack_exit);
+State state_CoolPack(&CoolPack_enter, &check_CoolPack, &CoolPack_exit);
+State state_Fault(&Fault_enter, &check_Fault, &Fault_exit);
 Fsm fsm(&state_Off);
 
 /* t0 Callback — 10ms LDU fixed safety frame (IntervalTimer / PIT, highest priority)
@@ -114,47 +124,26 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
   msg1.flags.extended = 1;
   switch (counter) {
     case 1:
-      msg1.id = 0xCF0100;//request min/max cells
+      msg1.id = 0xCF0100; // request min/max cells from module 1
       msg1.len = 0;
-      can1.write(msg1);
-      //delay(1);
-      msg1.id = 0xAF0100;
-      msg1.len = 3;
-      msg1.buf[0] = 0x01;
-      msg1.buf[1] = 0x10;
-      msg1.buf[2] = 0x2;
       can1.write(msg1);
       break;
     case 2:
-      msg1.id = 0xCF0200;//request min/max cells
+      msg1.id = 0xCF0200; // request min/max cells from module 2
       msg1.len = 0;
-      can1.write(msg1);
-      //delay(1);
-      msg1.id = 0xAF0200;
-      msg1.len = 3;
-      msg1.buf[0] = 0x01;
-      msg1.buf[1] = 0x10;
-      msg1.buf[2] = 0x2;
       can1.write(msg1);
       break;
     case 3:
       counter = 0;
-      msg1.id = 0xCF0300;//request min/max cells
+      msg1.id = 0xCF0300; // request min/max cells from module 3
       msg1.len = 0;
-      can1.write(msg1);
-      //delay(1);
-      msg1.id = 0xAF0300;
-      msg1.len = 3;
-      msg1.buf[0] = 0x01;
-      msg1.buf[1] = 0x10;
-      msg1.buf[2] = 0x2;
       can1.write(msg1);
       break;
   }
   counter++;
   //delay(1);
-  if (VCUstate == VCU_STATE_IDLE || VCUstate == VCU_STATE_DRIVE)
-    displayStatus();//update RealDash
+  if (VCUstate != VCU_STATE_OFF && VCUstate != VCU_STATE_FAULT)
+    displayStatus(); // update RealDash
 }//end of callback_cells_pdu()
 
 /* t2 Callback
@@ -173,81 +162,86 @@ void callback_t2() {
   msg1.id = 0xFF0000;
   msg1.flags.extended = 1;
   msg1.len = 0;
-  can1.write(msg1);  //send sample command every 1 second
+  can1.write(msg1);  
   //delay(1);
-  // Invalidate data from any pMBB32 that has not responded within 200ms
+  // Invalidate data from any pMBB32 that has not responded within 400ms
   {
     uint32_t now = millis();
-    if (now - lastUpdatePMBB1 > 200) { minCellV1 = 0xFFFF; maxCellV1 = 0; }
-    if (now - lastUpdatePMBB2 > 200) { minCellV2 = 0xFFFF; maxCellV2 = 0; }
-    if (now - lastUpdatePMBB3 > 200) { minCellV3 = 0xFFFF; maxCellV3 = 0; }
+    if (now - lastUpdatePMBB1 > 400) { minCellV1 = 0xFFFF; maxCellV1 = 0; }
+    if (now - lastUpdatePMBB2 > 400) { minCellV2 = 0xFFFF; maxCellV2 = 0; }
+    if (now - lastUpdatePMBB3 > 400) { minCellV3 = 0xFFFF; maxCellV3 = 0; }
     lowestCellV  = std::min({minCellV1, minCellV2, minCellV3});
     highestCellV = std::max({maxCellV1, maxCellV2, maxCellV3});
   }
-  // Increment stale counters every t2 period; reset in can1Sniff() on valid response
-  pMBB32stale1++;
-  pMBB32stale2++;
-  pMBB32stale3++;
-  //check min/max cell voltages on each pMBB32 every 3 t2 periods
-  
-/* 
-  if(PDUmsg2.buf[1] = pMBB32powerOff) { 
-    PDUmsg2.buf[1] = pMBB32powerOn;
-    can1.write(PDUmsg2);
-    delay(100);
-    wakepMBB32();
-  }
-  else {
-        
-    //check for stale pMBB32 CAN and restart if necessary
-    if((pMBB32stale1 > 50)|(pMBB32stale2 > 50)|(pMBB32stale3 > 50)){
-      PDUmsg2.buf[1] = pMBB32powerOff;
-      can1.write(PDUmsg2);
-      pMBB32stale1 = 0;
-      pMBB32stale2 = 0;
-      pMBB32stale3 = 0;
-      PDUmsg2.buf[1] = pMBB32powerOn;
-      can1.write(PDUmsg2);
-      delay(500);
-    }
+  // Increment stale counters every t2 period; reset in can1Sniff() on cell voltage frames.
+  // uint8_t wraps at 255 — clamp to avoid silent overflow.
+  if (pMBB32stale1 < 255) pMBB32stale1++;
+  if (pMBB32stale2 < 255) pMBB32stale2++;
+  if (pMBB32stale3 < 255) pMBB32stale3++;
 
-  } */
-  if(pMBB32stale1 > pMBB32staleMax)
-    pMBB32staleMax = pMBB32stale1;
-  if(pMBB32stale2 > pMBB32staleMax)
-    pMBB32staleMax = pMBB32stale2;
-  if(pMBB32stale3 > pMBB32staleMax)
-    pMBB32staleMax = pMBB32stale3;
-  
-  if(pMBB32stale1 > 50){
-    //send wakeup to pMBB32 #1
-    msg1.id = 0xAF0100; 
-    msg1.len = 3;
-    msg1.buf[0] = 0x01;
-    msg1.buf[1] = 0x10;
-    msg1.buf[2] = 0x2;
-    can1.write(msg1);
-    //delay(1);
+  if(pMBB32stale1 > pMBB32staleMax) pMBB32staleMax = pMBB32stale1;
+  if(pMBB32stale2 > pMBB32staleMax) pMBB32staleMax = pMBB32stale2;
+  if(pMBB32stale3 > pMBB32staleMax) pMBB32staleMax = pMBB32stale3;
+
+
+
+#ifdef PMBBB32_DEBUG
+  {
+    static uint8_t dbgTick = 0;
+    if (++dbgTick >= 5) {
+      dbgTick = 0;
+      Serial.printf("pMBB32 stale: #1=%u  #2=%u  #3=%u\n",
+                    pMBB32stale1, pMBB32stale2, pMBB32stale3);
+    }
   }
-  if(pMBB32stale2 > 50){
-    //send wakeup to pMBB32 #2
-    msg1.id = 0xAF0200;
-    msg1.len = 3;
-    msg1.buf[0] = 0x01;
-    msg1.buf[1] = 0x10;
-    msg1.buf[2] = 0x2;
-    can1.write(msg1);
-    //delay(1);
-  }
-  if(pMBB32stale3 > 50){
-    //send wakeup to pMBB32 #3
-    msg1.id = 0xAF0300;
-    msg1.len = 3;
-    msg1.buf[0] = 0x01;
-    msg1.buf[1] = 0x10;
-    msg1.buf[2] = 0x2;
-    can1.write(msg1);
-    //delay(1);
+#endif
+
+  // Stale recovery: non-blocking shutdown → 2 s delay → wake + contReportingEnable.
+  // Phase 0 = idle, 1 = shutdown sent (waiting 2 s), 2 = wake pending.
+  {
+    static struct {
+      uint8_t  *stale;
+      uint32_t  id;
+      uint8_t   num;
+      uint8_t   phase;    // 0=idle, 1=awaiting 2s after shutdown
+      uint32_t  phaseTime;
+    } mods[] = {
+      {&pMBB32stale1, 0xAF0100, 1, 0, 0},
+      {&pMBB32stale2, 0xAF0200, 2, 0, 0},
+      {&pMBB32stale3, 0xAF0300, 3, 0, 0},
+    };
+    bool anyWoke = false;
+    msg1.flags.extended = 1;
+    for (auto &m : mods) {
+      if (m.phase == 0 && *m.stale > 5) {
+        *m.stale = 0;
+        Serial.printf("pMBB32 #%u stale — sending shutdown\n", m.num);
+        msg1.id = m.id;
+        msg1.len = 1;
+        msg1.buf[0] = shutdown; // 0x55
+        can1.write(msg1);
+        m.phase = 1;
+        m.phaseTime = millis();
+      } else if (m.phase == 1 && millis() - m.phaseTime >= 2000) {
+        Serial.printf("pMBB32 #%u — sending wake + contReportingEnable\n", m.num);
+        msg1.id = m.id;
+        msg1.len = 3;
+        msg1.buf[0] = wakeup;
+        msg1.buf[1] = channelCount16;
+        msg1.buf[2] = numberOfDevices;
+        can1.write(msg1);
+        msg1.len = 1;
+        msg1.buf[0] = contReportingEnable;
+        can1.write(msg1);
+        m.phase = 0;
+        anyWoke = true;
+      }
+    }
+    if (anyWoke) {
+      msg1.id = 0xFF0000;
+      msg1.len = 0;
+      can1.write(msg1);
+    }
   }
 
   msg2.id = 0xA100101;//send SIM100MOD Request Isolation State command
@@ -428,19 +422,32 @@ void can1Sniff(const CAN_message_t &msg) {
     } */
   }//end 0x18FF0Eyy receiver
 
-  // Reset stale counter for whichever pMBB32 just responded
-  if ((msg.id & 0x00000F00) == 0x00000E00) {
-    switch (msg.id & 0x0000000F) {
-      case 1: pMBB32stale1 = 0; break;
-      case 2: pMBB32stale2 = 0; break;
-      case 3: pMBB32stale3 = 0; break;
-      default: break;
+  // Reset stale counter when a cell voltage broadcast is received (0x18FF01yy–0x18FF0Cyy).
+  // Min/max frames (0x18FF0Eyy) do NOT reset stale — they are explicitly polled and arrive
+  // even when the 0xFF0000 trigger is missed. Stale only clears when the module is actually
+  // broadcasting measurement data, which is what the recovery logic is meant to restore.
+  {
+    uint8_t frameType = (msg.id >> 8) & 0xFF;
+    uint8_t modNum    = msg.id & 0xFF;
+    if ((msg.id >> 16) == 0x18FF && frameType >= 0x01 && frameType <= 0x0C) {
+      switch (modNum) {
+        case 1: pMBB32stale1 = 0; break;
+        case 2: pMBB32stale2 = 0; break;
+        case 3: pMBB32stale3 = 0; break;
+        default: break;
+      }
     }
   }
 
-//  switch (msg.id) {
-    
-//  }
+#ifdef PMBBB32_DEBUG
+  // Log every frame from the pMBB32 0x18FFxxxx family so we can see which module
+  // is (or isn't) sending, and catch unexpected ID patterns.
+  if ((msg.id >> 16) == 0x18FF) {
+    Serial.printf("CAN1 0x%08X [%d]", msg.id, msg.len);
+    for (uint8_t i = 0; i < msg.len; i++) Serial.printf(" %02X", msg.buf[i]);
+    Serial.println();
+  }
+#endif
 
   digitalWriteFast(4, LOW);
 }// end of can1Sniff(const CAN_message_t &msg)
@@ -493,7 +500,7 @@ void can2Sniff(const CAN_message_t &msg) {
       if(msg.buf[2] == 0xF9){
         switch (msg.buf[4]) {
           case 0:
-            //
+            button_0x10_state = LOW; // reset so next button 5 press is detected as rising edge
             break;
           case 0x01://Park button pressed            
             new_0x01_state = HIGH;
@@ -571,23 +578,12 @@ void can2Sniff(const CAN_message_t &msg) {
               }
             }              
             break;
-          case 0x10://Ignition button pressed
-            new_0x10_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x10_state != last_0x10_state) {
-              // reset the debouncing timer
-              last_0x10_time = millis();
+          case 0x10: // KL15 — Start button: enter On State (one-shot, Park exits)
+            if (!button_0x10_state && !KL15state) {
+              button_0x10_state = HIGH;
+              KL15state = true;
+              Serial.println("KL15: ON");
             }
-            if ((millis() - last_0x10_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x10_state != button_0x10_state) {
-                button_0x10_state = new_0x10_state;
-                Serial.println("BTN: Ignition");
-              }
-            }        
             break;
           case 0x20://Speed mode button pressed
             new_0x20_state = HIGH;
@@ -817,38 +813,31 @@ void initCAN (int CAN1baud, int CAN2baud, int CAN3baud) {
 }//end of initCAN (int CAN1baud, int CAN2baud, int CAN3baud)
 
 void wakepMBB32(){
-  //PDUmsg.buf[1] = pMBB32powerOn;
-  //can1.write(PDUmsg1);
-  //delay(200);
-  
-  //send wakeup to pMBB32 #1
-  msg1.id = 0xAF0100; 
-  msg1.len = 3;
-  msg1.buf[0] = 0x01;
-  msg1.buf[1] = 0x10;
-  msg1.buf[2] = 0x2;
-  can1.write(msg1);
-  delay(1);
-  
-  //send wakeup to pMBB32 #2
-  msg1.id = 0xAF0200;
-  msg1.len = 3;
-  msg1.buf[0] = 0x01;
-  msg1.buf[1] = 0x10;
-  msg1.buf[2] = 0x2;
-  can1.write(msg1);
-  delay(1);
+  msg1.flags.extended = 1;
 
-  //send wakeup to pMBB32 #3
-  msg1.id = 0xAF0300;
-  msg1.len = 3;
-  msg1.buf[0] = 0x01;
-  msg1.buf[1] = 0x10;
-  msg1.buf[2] = 0x2;
-  can1.write(msg1);
-  delay(1);
+  static const uint32_t modIds[] = {0xAF0100, 0xAF0200, 0xAF0300};
 
-  //send broadcast start of measurement command to pMBB32
+  // Step 1: wake each module
+  for (uint8_t i = 0; i < 3; i++) {
+    msg1.id = modIds[i];
+    msg1.len = 3;
+    msg1.buf[0] = wakeup;         // 0x01
+    msg1.buf[1] = channelCount16; // 0x10: 16-cell module
+    msg1.buf[2] = numberOfDevices;  // 0x02
+    can1.write(msg1);
+    delay(10);
+  }
+
+  // Step 2: enable continuous cell voltage reporting on each module (1-byte command)
+  for (uint8_t i = 0; i < 3; i++) {
+    msg1.id = modIds[i];
+    msg1.len = 1;
+    msg1.buf[0] = contReportingEnable; // 0x10
+    can1.write(msg1);
+    delay(10);
+  }
+
+  // Step 3: trigger first measurement cycle
   msg1.id = 0xFF0000;
   msg1.len = 0;
   can1.write(msg1);
@@ -1112,23 +1101,47 @@ void Off_enter()
 {
   Serial.println("Entering Off state");
   VCUstate = VCU_STATE_OFF;
+
+  // Set keypad LEDs for Off state: buttons 1-7 off, button 8 amber blink (awaiting KL15)
+  msg2.id = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04;
+  msg2.buf[1] = 0x1B;
+  msg2.buf[5] = 0xFF;
+  msg2.buf[6] = 0xFF;
+  msg2.buf[7] = 0xFF;
+  for (uint8_t btn = 1; btn <= 7; btn++) {
+    msg2.buf[2] = KEYPAD_CMD_SET_LED;
+    msg2.buf[3] = btn;
+    msg2.buf[4] = KEYPAD_COLOR_OFF;
+    can2.write(msg2);
+  }
+  msg2.buf[2] = KEYPAD_CMD_SET_LED;
+  msg2.buf[3] = 0x08; // button 8 — drive mode, amber blink to indicate "waiting for KL15"
+  msg2.buf[4] = KEYPAD_COLOR_AMBER;
+  msg2.buf[5] = KEYPAD_MODE_BLINK;
+  msg2.buf[6] = 0x00;
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
 }
 
 void Off_exit()
 {
   Serial.println("Exiting Off state");
   //enable negative contactor
-  PDUmsg1.buf[0] = 0x0D;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
+  PDUmsg2.buf[0] = 0xFE;//HS driver 1 PWM set to 99%- negative contactor
+  PDUmsg1.buf[0] = 13;//HS driver 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
   /* Check for welded contactor here*/
 
-  PDUmsg1.buf[3] = 0;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
 }
 
 void Idle_enter()
 {
   Serial.println("Entering Idle state");
   VCUstate = VCU_STATE_IDLE;
-  PDUmsg1.buf[2] = 5;//channel 3 current limit 2A (2/0.4A = 5) - positive pre-charge
+  //PDUmsg2.buf[3] = 0xFE;//HS driver 3 PWM set to 99%- positive pre-charge
+  //PDUmsg1.buf[3] = 5;//HS driver 3 current limit 2A (2/0.4A = 5) - positive pre-charge
 
   msg2.id = 0x18EF2100;//keypad button color command
   msg2.flags.extended = 1;
@@ -1142,23 +1155,32 @@ void Idle_enter()
   msg2.buf[6] = 0x00;
   msg2.buf[7] = 0xFF;
   can2.write(msg2);
-  delay(1);
+  //delay(1);
+
+  // read IVT-MOD pack voltage U2, compare to pack voltage U1, if U2 < 95% of U1 after 2 seconds:
+  // - send error message to keypad
+  // - turn off pre-charge
+  // - go back to off state
 
   //if pre-charge fails after 5 seconds, turn off pre-charge and send error message
-  delay(5000);
-  msg2.id = 0x18EF2100;//keypad button color command
-  msg2.flags.extended = 1;
-  msg2.len = 8;
-  msg2.buf[0] = 0x04;
-  msg2.buf[1] = 0x1B;
-  msg2.buf[2] = KEYPAD_CMD_SET_LED;
-  msg2.buf[3] = 0x05;//button 5
-  msg2.buf[4] = KEYPAD_COLOR_AMBER;
-  msg2.buf[5] = KEYPAD_MODE_ALT_BLINK;
-  msg2.buf[6] = KEYPAD_COLOR_RED;
-  msg2.buf[7] = 0xFF;
-  can2.write(msg2);
-  delay(1);
+  // delay(5000);
+  // msg2.id = 0x18EF2100;//keypad button color command
+  // msg2.flags.extended = 1;
+  // msg2.len = 8;
+  // msg2.buf[0] = 0x04;
+  // msg2.buf[1] = 0x1B;
+  // msg2.buf[2] = KEYPAD_CMD_SET_LED;
+  // msg2.buf[3] = 0x05;//button 5
+  // msg2.buf[4] = KEYPAD_COLOR_AMBER;
+  // msg2.buf[5] = KEYPAD_MODE_ALT_BLINK;
+  // msg2.buf[6] = KEYPAD_COLOR_RED;
+  // msg2.buf[7] = 0xFF;
+  // can2.write(msg2);
+  //delay(1);
+
+  // if pre-charge good, enable positive contactor
+  //PDUmsg2.buf[4] = 0xFE;//HS driver 5 PWM set to 99%- positive contactor
+  //PDUmsg1.buf[4] = 0;//HS driver 5 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
 
 
   /* Send SMS
@@ -1193,8 +1215,8 @@ void Idle_exit()
 {
   Serial.println("Exiting Idle state");
   //disable positive and negative contactors
-  PDUmsg1.buf[0] = 0;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
-  PDUmsg1.buf[3] = 0;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
+  //PDUmsg1.buf[0] = 0;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
+  //PDUmsg1.buf[3] = 0;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
 }
 
 void on_trans_Off_Idle()
@@ -1235,28 +1257,169 @@ void on_trans_Charge_Idle()
   
 }
 
+// ── New state functions ──────────────────────────────────────────────────────
+
+void PreCharge_enter() {
+  Serial.println("Entering PreCharge state");
+  VCUstate = VCU_STATE_PRECHARGE;
+  preChargeStartTime = millis();
+  PDUmsg1.buf[0] = 0x0D; // CH1 5A — negative contactor on
+  PDUmsg1.buf[2] = 0x05; // CH3 2A — pre-charge relay on
+}
+
+void PreCharge_exit() {
+  Serial.println("Exiting PreCharge state");
+  PDUmsg1.buf[2] = 0x00; // CH3 off — pre-charge relay off
+}
+
+void check_PreCharge() {
+  if (IVTpackVoltage > 0 &&
+      IVTpreChargeV >= (IVTpackVoltage * 95 / 100)) {
+    PDUmsg1.buf[3] = 0x0D; // CH4 5A — positive contactor on
+    fsm.trigger(chargeMode ? PRECHARGE_CHARGE : PRECHARGE_OK);
+  } else if (millis() - preChargeStartTime > PRECHARGE_TIMEOUT_MS) {
+    fsm.trigger(PRECHARGE_FAIL);
+  }
+}
+
+void check_Idle() {
+  if (button_0x01_state && LDUrpm == 0) { // Park + stopped → exit On State
+    button_0x01_state = 0;
+    KL15state = false;
+    fsm.trigger(KL15_OFF);
+    return;
+  }
+  if (button_0x08_state) { // Drive button → enter Drive state
+    fsm.trigger(DRIVE_ON);
+    return;
+  }
+  // TODO: BMS out-of-bounds temp → fsm.trigger(TEMP_LOW) or fsm.trigger(TEMP_HIGH)
+}
+
+void Drive_exit() {
+  Serial.println("Exiting Drive state");
+  LDUdirection = LDU_DIR_STOP;
+}
+
+void check_DriveState() {
+  if (button_0x01_state && LDUrpm == 0) { // Park button + stopped → Idle
+    button_0x01_state = 0;
+    fsm.trigger(DRIVE_OFF);
+    return;
+  }
+  // TODO: isolation fault → fsm.trigger(FAULT_EV)
+  // TODO: BMS temp out of bounds → fsm.trigger(TEMP_LOW) or fsm.trigger(TEMP_HIGH)
+}
+
+void Charge_exit() {
+  Serial.println("Exiting Charge state");
+  PDUmsg1.buf[0] = 0x00; // CH1 off — negative contactor
+  PDUmsg1.buf[3] = 0x00; // CH4 off — positive contactor
+}
+
+void check_Charge() {
+  if (button_0x01_state && LDUrpm == 0) { // Park + stopped → emergency exit
+    button_0x01_state = 0;
+    KL15state = false;
+    fsm.trigger(KL15_OFF);
+    return;
+  }
+  // TODO: EVCC stop charge request → fsm.trigger(CHARGE_OFF)
+  // TODO: isolation fault → fsm.trigger(FAULT_EV)
+  // TODO: BMS temp out of bounds → fsm.trigger(TEMP_LOW) or fsm.trigger(TEMP_HIGH)
+}
+
+void Fault_enter() {
+  Serial.println("Entering Fault state");
+  VCUstate = VCU_STATE_FAULT;
+  PDUmsg1.buf[0] = 0x00; // CH1 off — negative contactor
+  PDUmsg1.buf[2] = 0x00; // CH3 off — pre-charge relay
+  PDUmsg1.buf[3] = 0x00; // CH4 off — positive contactor
+  msg2.id = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04; 
+  msg2.buf[1] = 0x1B;
+  msg2.buf[2] = KEYPAD_CMD_SET_LED;
+  msg2.buf[3] = 0x05;
+  msg2.buf[4] = KEYPAD_COLOR_RED;
+  msg2.buf[5] = KEYPAD_MODE_BLINK;
+  msg2.buf[6] = 0x00; 
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
+  msg3.id = 0xC79;
+  msg3.len = 1;
+  msg3.buf[0] = 2; // "Something happened..."
+  can3.write(msg3);
+}
+
+void Fault_exit() {
+  Serial.println("Exiting Fault state");
+}
+
+void check_Fault() {
+  if (button_0x01_state && LDUrpm == 0) {
+    button_0x01_state = 0;
+    KL15state = false;
+    fsm.trigger(FAULT_CLEAR);
+  }
+}
+
+void HeatPack_enter() {
+  Serial.println("Entering HeatPack state");
+  VCUstate = VCU_STATE_HEAT_PACK;
+  // TODO: set pumpSetpoint and send to WP29; enable heater output
+}
+
+void HeatPack_exit() {
+  Serial.println("Exiting HeatPack state");
+  // TODO: disable heater; stop pump
+}
+
+void check_HeatPack() {
+  if (button_0x01_state && LDUrpm == 0) { button_0x01_state = 0; KL15state = false; fsm.trigger(KL15_OFF); return; }
+  // TODO: monitor pMBB32 temps; fsm.trigger(TEMP_OK) when in range
+}
+
+void CoolPack_enter() {
+  Serial.println("Entering CoolPack state");
+  VCUstate = VCU_STATE_COOL_PACK;
+  // TODO: set pumpSetpoint and send to WP29; enable AC exchanger
+}
+
+void CoolPack_exit() {
+  Serial.println("Exiting CoolPack state");
+  // TODO: disable AC exchanger; stop pump
+}
+
+void check_CoolPack() {
+  if (button_0x01_state && LDUrpm == 0) { button_0x01_state = 0; KL15state = false; fsm.trigger(KL15_OFF); return; }
+  // TODO: monitor pMBB32 temps; fsm.trigger(TEMP_OK) when in range
+}
+
+// ── New transition callbacks ─────────────────────────────────────────────────
+
+void on_trans_Off_PreCharge()     { Serial.println("Off → PreCharge"); }
+void on_trans_PreCharge_Idle()    { Serial.println("PreCharge OK → Idle"); }
+void on_trans_PreCharge_Charge()  { Serial.println("PreCharge OK → Charge"); }
+void on_trans_PreCharge_Fault()   { Serial.println("PreCharge FAILED → Fault"); }
+void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
+
+// ── Existing check functions ─────────────────────────────────────────────────
+
 void check_KL15()
 {
-  bool kl15 = digitalRead(KL15_PIN) == 1;
-  static bool last_kl15 = !kl15;
-  if(kl15 != last_kl15) {
-    last_kl15 = kl15;
-    Serial.print("KL15: ");
-    Serial.println(kl15 ? "ON" : "OFF");
-  }
-  if(kl15) {
+  if (KL15state) {
     fsm.trigger(KL15_ON);
-  } else {
-    //fsm.trigger(KL15_OFF);
   }
 }
 
 void check_KL17()
 {
   if(KL17state) {//internal KL15 (switched 'ignition' state)
-    fsm.trigger(KL17_ON);
+    fsm.trigger(KL15_ON);
   } else {
-    //fsm.trigger(KL17_OFF);
+    //fsm.trigger(KL15_OFF);
   }
 }
 void check_Drive()
@@ -1354,7 +1517,7 @@ void setup() {
 
   linInit();//BMW changeover valve LIN master on Serial3
 
-  //digital.pinMode(KL15_PIN, INPUT_PULLDOWN, RISING);// wake pin
+  //digital.pinMode(KLR_PIN, INPUT_PULLDOWN, RISING);// KLR wake pin — TODO: Teensy sleep/wakeup
 
   initCAN(500000, 500000, 1000000);//start CAN1, CAN2, CAN3 at 500kbps, 500kbps, 1Mbps
   delay(100);
@@ -1428,7 +1591,7 @@ void setup() {
   can1.write(PDUmsg2);
 
   t1.begin(callback_t1, t1CallbackRate);
-  delay(200);
+  delay(100);
   wakepMBB32();
 
   t2.begin(callback_t2, t2CallbackRate);
@@ -1573,11 +1736,44 @@ void setup() {
   can2.write(msg2);
   delay(1);
 */
+  // Off → PreCharge (KL15_ON or EVCC sets chargeMode=true then fires KL15_ON)
+  fsm.add_transition(&state_Off, &state_PreCharge, KL15_ON, &on_trans_Off_PreCharge);
 
-  fsm.add_transition(&state_Off, &state_Idle, KL15_ON, &on_trans_Off_Idle);
-  fsm.add_transition(&state_Idle, &state_Drive, DRIVE_ON, &on_trans_Idle_Drive);
-  fsm.add_transition(&state_Idle, &state_Charge, CHARGE_ON, &on_trans_Idle_Charge);
-  fsm.add_transition(&state_Idle, &state_Off, KL15_OFF, &on_trans_Idle_Off);
+  // PreCharge outcomes
+  fsm.add_transition(&state_PreCharge, &state_Idle,   PRECHARGE_OK,     &on_trans_PreCharge_Idle);
+  fsm.add_transition(&state_PreCharge, &state_Charge, PRECHARGE_CHARGE, &on_trans_PreCharge_Charge);
+  fsm.add_transition(&state_PreCharge, &state_Fault,  PRECHARGE_FAIL,   &on_trans_PreCharge_Fault);
+  fsm.add_transition(&state_PreCharge, &state_Off,    KL15_OFF,         &on_trans_Idle_Off);
+
+  // Idle ↔ Drive
+  fsm.add_transition(&state_Idle,  &state_Drive, DRIVE_ON,  &on_trans_Idle_Drive);
+  fsm.add_transition(&state_Drive, &state_Idle,  DRIVE_OFF, &on_trans_Drive_Idle);
+
+  // Any active state → Off on KL15_OFF
+  fsm.add_transition(&state_Idle,     &state_Off, KL15_OFF, &on_trans_Idle_Off);
+  fsm.add_transition(&state_Drive,    &state_Off, KL15_OFF, &on_trans_Idle_Off);
+  fsm.add_transition(&state_Charge,   &state_Off, KL15_OFF, &on_trans_Idle_Off);
+  fsm.add_transition(&state_HeatPack, &state_Off, KL15_OFF, &on_trans_Idle_Off);
+  fsm.add_transition(&state_CoolPack, &state_Off, KL15_OFF, &on_trans_Idle_Off);
+
+  // Fault paths
+  fsm.add_transition(&state_Drive,      &state_Fault, FAULT_EV,    nullptr);
+  fsm.add_transition(&state_Charge,     &state_Fault, FAULT_EV,    nullptr);
+  fsm.add_transition(&state_PreCharge,  &state_Fault, FAULT_EV,    nullptr);
+  fsm.add_transition(&state_Fault,      &state_Off,   FAULT_CLEAR, &on_trans_Fault_Off);
+
+  // Charge stop (EVCC request)
+  fsm.add_transition(&state_Charge, &state_Off, CHARGE_OFF, nullptr);
+
+  // Thermal management
+  fsm.add_transition(&state_Idle,     &state_HeatPack, TEMP_LOW,  nullptr);
+  fsm.add_transition(&state_Drive,    &state_HeatPack, TEMP_LOW,  nullptr);
+  fsm.add_transition(&state_Charge,   &state_HeatPack, TEMP_LOW,  nullptr);
+  fsm.add_transition(&state_Idle,     &state_CoolPack, TEMP_HIGH, nullptr);
+  fsm.add_transition(&state_Drive,    &state_CoolPack, TEMP_HIGH, nullptr);
+  fsm.add_transition(&state_Charge,   &state_CoolPack, TEMP_HIGH, nullptr);
+  fsm.add_transition(&state_HeatPack, &state_Idle,     TEMP_OK,   nullptr);
+  fsm.add_transition(&state_CoolPack, &state_Idle,     TEMP_OK,   nullptr);
 
 }//end of setup()
 

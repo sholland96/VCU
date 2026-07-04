@@ -29,11 +29,32 @@ Devices: pMBB32 battery management modules (×3), PDU-8 power distribution unit
 
 | ID | Type | Description |
 |----|------|-------------|
-| `0xFF0000` | Extended | Start-of-measurement broadcast to all pMBB32s |
-| `0xCF0100 / 02 / 03` | Extended | Request min/max cells from pMBB32 #1 / #2 / #3 |
-| `0xAF0100 / 02 / 03` | Extended | Set mode / wakeup / shutdown to pMBB32 #1 / #2 / #3 |
-| `0x0A0620` | Extended | PDU-8 driver settings — channel current limits (sent every 62.5 ms) |
-| `0x0A0630` | Extended | PDU-8 driver outputs — channel PWM duty cycles *(disabled, unverified)* |
+| `0xFF0000` | Extended | Start-of-measurement broadcast to all pMBB32s — triggers cell voltage response frames |
+| `0xCF0100 / 02 / 03` | Extended | Request min/max cell voltages from pMBB32 #1 / #2 / #3 |
+| `0xAF0100 / 02 / 03` | Extended | pMBB32 mode command — see two-command startup sequence below |
+
+**pMBB32 startup sequence (sent once at power-on via `wakepMBB32()`):**
+
+Step 1 — Wake (3 bytes):
+
+| Byte | Value | Meaning |
+|------|-------|---------|
+| 0 | `0x01` (`wakeup`) | Wake command |
+| 1 | `0x10` (`channelCount16`) | Number of cell channels (16) |
+| 2 | `0x02` (`numberOfDevices`) | Number of AFE ICs per module (2) |
+
+Step 2 — Enable continuous reporting (2 bytes, sent separately to each module):
+
+| Byte | Value | Meaning |
+|------|-------|---------|
+| 0 | `0x10` (`contReportingEnable`) | Enable continuous cell voltage broadcast |
+| 1 | `0x10` (`channelCount16`) | Number of cell channels (16) |
+
+Step 3 — Send `0xFF0000` to trigger the first measurement cycle.
+
+After startup, `0xFF0000` is sent every 200 ms to keep measurements running. If a module stops responding (stale counter > 50), the full wake + contReportingEnable sequence is re-sent automatically.
+| `0x0A0620` | Extended | PDU-8 driver settings — PDUmsg1 - channel current limits (sent every 62.5 ms) |
+| `0x0A0630` | Extended | PDU-8 driver outputs — PDUmsg2 - channel PWM duty cycles *(disabled, unverified)* |
 
 **PDU-8 `0x0A0620` byte map** — current limit register: A ÷ 0.4 (e.g. 5 A → 0x0D, 2 A → 0x05, 0 = off)
 
@@ -210,7 +231,7 @@ Key constants (`defines.h`):
 
 | Pin | Function |
 |-----|----------|
-| 2 | KL15 input (ignition sense) |
+| 2 | KLR input (`KLR_PIN`) — key position 1, wakes hardware |
 | 3 | Loop timing debug output |
 | 4 | CAN1 RX timing debug output |
 | 5 | CAN2 RX timing debug output |
@@ -229,20 +250,69 @@ Key constants (`defines.h`):
 
 ## State Machine
 
+The VCU uses two top-level regions separated by the physical key switch:
+
+### KLR region (key position 1)
+
+Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the KL15 start button (keypad button 5).
+
+Turning the key off (KLR_OFF) will eventually trigger a sleep/power-down sequence — *TODO: Teensy low-power implementation.*
+
+### On State (KL15 active)
+
+Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable sequence. The entire On State is exited by pressing the **Park** button while the vehicle is stationary (`LDUrpm == 0`), which fires `KL15_OFF` and disables the contactors.
+
 ```
-         KL15 ON              DRIVE_ON
-  [Off] ---------> [Idle] -------------> [Drive]
-    ^                |  \
-    |    KL15 OFF    |   \ CHARGE_ON
-    +----------------+    +-----------> [Charge]
+  [KLR / Off] ──── KL15_ON (btn 5) ────> [PreCharge]
+       ^                                      │ IVT U2 ≥ 95% U1 within 2 s
+       │ KL15_OFF                             ├──────────────────────> [Idle]
+       │ (Park btn, speed = 0)                │ EVCC chargeMode = true
+       │ or FAULT_CLEAR                       ├──────────────────────> [Charge]
+       │ (Park btn, speed = 0)                │ timeout or FAULT_EV
+       │                                      └──────────────────────> [Fault]
+       │
+       │          DRIVE_ON (btn 8)      DRIVE_OFF (btn 1, speed = 0)
+       │          [Idle] ──────────────> [Drive] ──────────────────> [Idle]
+       │
+       │          TEMP_LOW / TEMP_HIGH                    TEMP_OK
+       │          [Idle/Drive/Charge] ──────> [HeatPack / CoolPack] ──> [Idle]
+       │
+       └── KL15_OFF (Park btn, speed = 0) from any On state ──────> [Off]
 ```
 
-| State | Entry action |
-|-------|-------------|
-| Off | Contactors disabled |
-| Idle | Pre-charge relay enabled; keypad LED amber blink; "KL15 on" SMS sent |
-| Drive | LDU start/forward/reverse controlled by keypad P/R/N/D buttons |
-| Charge | *(TBD)* |
+### State table
+
+| State | Entry action | Exit condition |
+|-------|-------------|----------------|
+| Off | All contactors off; awaiting KL15 | Button 5 pressed → `KL15_ON` |
+| PreCharge | Negative contactor on; pre-charge relay on; IVT U2 monitored | U2 ≥ 95% U1 → `PRECHARGE_OK`; timeout → `PRECHARGE_FAIL` |
+| Idle | Positive contactor on; keypad amber blink; "KL15 on" SMS | Button 8 (Drive) → `DRIVE_ON`; Button 1 (Park) + speed=0 → `KL15_OFF` |
+| Drive | LDU enabled; direction from keypad N/R/D | Button 1 (Park) + speed=0 → `DRIVE_OFF` (→ Idle) |
+| Charge | EVCC-initiated; contactors remain closed | EVCC stop request → `CHARGE_OFF`; Button 1 + speed=0 → `KL15_OFF` |
+| HeatPack | Pump on; heater on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
+| CoolPack | Pump on; AC exchanger on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
+| Fault | All contactors off; keypad red blink; fault SMS | Button 1 (Park) + speed=0 → `FAULT_CLEAR` (→ Off) |
+
+`reducedPowerActive` flag (set by BMS temp fault during Drive/Charge) clamps throttle to `THROTTLE_FAULT_LIMIT` without leaving Drive state.
+
+---
+
+## CAN Keypad Button Assignment
+
+Keypad: RX `0x18EFFF21`, TX `0x18EF2100` (CAN2 @ 500 kbps)
+
+| Button | `buf[4]` mask | Label | Function |
+|--------|--------------|-------|----------|
+| 1 | `0x01` | Park | In Drive: return to Idle (speed = 0 required). In Idle/Charge/HeatPack/CoolPack/Fault: exit On State (speed = 0 required). |
+| 2 | `0x02` | Reverse | Set LDU direction to reverse |
+| 3 | `0x04` | Neutral | Set LDU direction to neutral |
+| 4 | `0x08` | Drive | In Idle: enter Drive state; set LDU direction to forward |
+| 5 | `0x10` | KL15 / Start | Enter On State (fires `KL15_ON`); one-shot — Park exits |
+| 6 | `0x20` | Speed Mode | *(undefined — reserved)* |
+| 7 | `0x40` | Auxiliary | *(undefined — reserved)* |
+| 8 | `0x80` | Drive Mode | *(undefined — reserved)* |
+
+Button states are event-driven (`buf[2] == 0xF9`). `buf[4] == 0x00` indicates no button pressed and resets edge-detection for button 5.
 
 ---
 
@@ -252,7 +322,7 @@ Key constants (`defines.h`):
 |-------|----------|--------|------|
 | **t0** | PIT (IntervalTimer) | **10 ms** | Throttle pipeline (read/verify/arbitrate/map); assemble and send LDU 0x201 safety frame |
 | t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update |
-| t2 | GPT1 | 200 ms | pMBB32 measurement broadcast; stale module wakeup; SIM100MOD isolation poll; LIN valve poll |
+| t2 | GPT1 | 200 ms | Send `0xFF0000` measurement trigger; invalidate stale module data; stale module recovery (wake + contReportingEnable); SIM100MOD isolation poll; LIN valve poll |
 | t3 | GPT2 | 1000 ms | Heartbeat LED toggle |
 | main loop | — | free-running | CAN event dispatch; GNSS processing; FSM step |
 

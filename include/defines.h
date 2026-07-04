@@ -4,9 +4,12 @@
 
 typedef enum {
   VCU_STATE_OFF = 0,
+  VCU_STATE_PRECHARGE,
   VCU_STATE_IDLE,
   VCU_STATE_DRIVE,
   VCU_STATE_CHARGE,
+  VCU_STATE_HEAT_PACK,
+  VCU_STATE_COOL_PACK,
   VCU_STATE_FAULT
 } VCUStateEnum;
 
@@ -65,6 +68,7 @@ typedef enum {
 //#define TFT240_240_display
 #define UBLOX_GNSS
 //#define TCP_Interface
+//#define PMBBB32_DEBUG  // print all 0x18FF__ CAN1 frames + stale counters to Serial
 
 #ifdef TFT240_240_display
 #include <SPI.h>
@@ -276,15 +280,20 @@ uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by dis
 #define THROTTLE_FAULT_LIMIT    20    // max throttle % permitted when IVT or SIM fault active
 #define BRAKE_PIN               A17
 #define BRAKE_THRESHOLD         200   // ADC counts (0–4095) — TODO: bench calibrate
+#define PRECHARGE_TIMEOUT_MS    2000  // pre-charge relay must raise U2 to ≥95% of U1 within this window
 uint16_t throttlePot1Raw;             // raw 12-bit ADC count, track 1
 uint16_t throttlePot2Raw;             // raw 12-bit ADC count, track 2
 bool     throttlePlausibility = true; // false = tracks disagree → throttle forced to 0
 bool     brakePedal           = false;// true when brake pedal is pressed
 bool     IVTfaultActive       = false;// set in can2Sniff on overcurrent / overvoltage
+uint32_t preChargeStartTime   = 0;   // millis() when PreCharge state was entered
+bool     chargeMode           = false;// true when pre-charge was triggered by EVCC, not KL15
+bool     reducedPowerActive   = false;// true when BMS temp fault limits available power
 uint16_t groundSpeed = 0;
 uint32_t GPSaltitude = 0;
 uint8_t fixType;
 bool KL17state;
+bool KL15state = false;  // true when keypad button 5 (KL15/Ignition) is active
 
 uint16_t debounceDelay = 250;//debounce time (ms)
 uint8_t button_0x01_state;
@@ -311,14 +320,14 @@ uint8_t last_0x10_state;
 uint8_t last_0x20_state;
 uint8_t last_0x40_state;
 uint8_t last_0x80_state;
-uint8_t last_0x01_time;
-uint8_t last_0x02_time;
-uint8_t last_0x04_time;
-uint8_t last_0x08_time;
-uint8_t last_0x10_time;
-uint8_t last_0x20_time;
-uint8_t last_0x40_time;
-uint8_t last_0x80_time;
+uint8_t  last_0x01_time;
+uint8_t  last_0x02_time;
+uint8_t  last_0x04_time;
+uint8_t  last_0x08_time;
+uint32_t last_0x10_time;  // uint32_t — holds millis() for debounce
+uint8_t  last_0x20_time;
+uint8_t  last_0x40_time;
+uint8_t  last_0x80_time;
 
 char ReplyBuffer[] = "acknowledged";
 uint8_t displayBuffer[16];
@@ -371,15 +380,34 @@ void initCANframes(CAN_message_t *, CAN_message_t *);
 void displayStatus();
 
 void check_KL15();
-void check_Drive();
+void check_PreCharge();
+void check_Idle();
+void check_DriveState();
+void check_Charge();
+void check_Fault();
+void check_HeatPack();
+void check_CoolPack();
 void Off_enter();
 void Off_exit();
+void PreCharge_enter();
+void PreCharge_exit();
 void Idle_enter();
 void Idle_exit();
 void Drive_enter();
 void Drive_exit();
 void Charge_enter();
 void Charge_exit();
+void Fault_enter();
+void Fault_exit();
+void HeatPack_enter();
+void HeatPack_exit();
+void CoolPack_enter();
+void CoolPack_exit();
+void on_trans_Off_PreCharge();
+void on_trans_PreCharge_Idle();
+void on_trans_PreCharge_Charge();
+void on_trans_PreCharge_Fault();
+void on_trans_Fault_Off();
 
 byte buf[8];
 
