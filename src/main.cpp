@@ -497,151 +497,49 @@ void can2Sniff(const CAN_message_t &msg) {
       IVTenergyCounter = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
     case 0x18EFFF21://CAN keypad
-      if(msg.buf[2] == 0xF9){
-        switch (msg.buf[4]) {
-          case 0:
-            button_0x10_state = LOW; // reset so next button 5 press is detected as rising edge
+      if(msg.buf[2] == 0x01){ // Key Contact state (event-driven, enabled by default)
+        bool pressed = (msg.buf[4] == 0x01);
+        switch (msg.buf[3]) { // key number 1-8
+          case 1://Park
+            button_0x01_state = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_STOP; Serial.println("BTN: Park"); }
             break;
-          case 0x01://Park button pressed            
-            new_0x01_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x01_state != last_0x01_state) {
-              // reset the debouncing timer
-              last_0x01_time = millis();
-            }
-            if ((millis() - last_0x01_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x01_state != button_0x01_state) {
-                button_0x01_state = new_0x01_state;
-                LDUdirection = LDU_DIR_STOP;
-                Serial.println("BTN: Park");
-              }
-            }            
+          case 2://Reverse
+            button_0x02_state = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_REVERSE; Serial.println("BTN: Reverse"); }
             break;
-          case 0x02://Reverse button pressed
-            new_0x02_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x02_state != last_0x02_state) {
-              // reset the debouncing timer
-              last_0x02_time = millis();
-            }
-            if ((millis() - last_0x02_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x02_state != button_0x02_state) {
-                button_0x02_state = new_0x02_state;
-                LDUdirection = LDU_DIR_REVERSE;
-                Serial.println("BTN: Reverse");
-              }
-            }            
+          case 3://Neutral
+            button_0x04_state = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_NEUTRAL; Serial.println("BTN: Neutral"); }
             break;
-          case 0x04://Neutral button pressed
-            new_0x04_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x04_state != last_0x04_state) {
-              // reset the debouncing timer
-              last_0x04_time = millis();
-            }
-            if ((millis() - last_0x04_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x04_state != button_0x04_state) {
-                button_0x04_state = new_0x04_state;
-                LDUdirection = LDU_DIR_NEUTRAL;
-                Serial.println("BTN: Neutral");
-              }
-            }           
+          case 4://Drive
+            button_0x08_state = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_FORWARD; Serial.println("BTN: Drive"); }
             break;
-          case 0x08://Drive button pressed
-            new_0x08_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x08_state != last_0x08_state) {
-              // reset the debouncing timer
-              last_0x08_time = millis();
-            }
-            if ((millis() - last_0x08_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x08_state != button_0x08_state) {
-                button_0x08_state = new_0x08_state;
-                LDUdirection = LDU_DIR_FORWARD;
-                Serial.println("BTN: Drive");
-              }
-            }              
-            break;
-          case 0x10: // KL15 — Start button: enter On State (one-shot, Park exits)
-            if (!button_0x10_state && !KL15state) {
+          case 5: // KL15 — one-shot start, Park exits
+            if (pressed && !button_0x10_state && !KL15state) {
               button_0x10_state = HIGH;
               KL15state = true;
               Serial.println("KL15: ON");
+            } else if (!pressed) {
+              button_0x10_state = LOW;
             }
             break;
-          case 0x20://Speed mode button pressed
-            new_0x20_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x20_state != last_0x20_state) {
-              // reset the debouncing timer
-              last_0x20_time = millis();
-            }
-            if ((millis() - last_0x20_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x20_state != button_0x20_state) {
-                button_0x20_state = new_0x20_state;
-                Serial.println("BTN: Speed Mode");
-              }
-            }            
+          case 6://Speed Mode
+            button_0x20_state = pressed ? HIGH : LOW;
+            if (pressed) Serial.println("BTN: Speed Mode");
             break;
-          case 0x40://AUX button pressed
-            new_0x40_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x40_state != last_0x40_state) {
-              // reset the debouncing timer
-              last_0x40_time = millis();
-            }
-            if ((millis() - last_0x40_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x40_state != button_0x40_state) {
-                button_0x40_state = new_0x40_state;
-                Serial.println("BTN: AUX");
-              }
-            }            
+          case 7://AUX
+            button_0x40_state = pressed ? HIGH : LOW;
+            if (pressed) Serial.println("BTN: AUX");
             break;
-          case 0x80://Drive mode button pressed
-            new_0x80_state = HIGH;
-            // If the switch changed, due to noise or pressing:
-            if (new_0x80_state != last_0x80_state) {
-              // reset the debouncing timer
-              last_0x80_time = millis();
-            }
-            if ((millis() - last_0x80_time) > debounceDelay) {
-              // whatever the reading is at, it's been there for longer than the debounce
-              // delay, so take it as the actual current state.
-
-              // if the button state has changed:
-              if (new_0x80_state != button_0x80_state) {
-                button_0x80_state = new_0x80_state;
-                Serial.println("BTN: Drive Mode");
-              }
-            }            
+          case 8://Drive Mode
+            button_0x80_state = pressed ? HIGH : LOW;
+            if (pressed) Serial.println("BTN: Drive Mode");
             break;
-        default:
-          Serial.println("Bad Button!");
-          break;
+          default:
+            Serial.printf("BTN: unknown key %u\n", msg.buf[3]);
+            break;
         }
       }
       break;
@@ -1758,8 +1656,21 @@ void setup() {
   msg2.len = 8;
   msg2.buf[0] = 0x04;
   msg2.buf[1] = 0x1B;
-  msg2.buf[2] = KEYPAD_CMD_LIVE_BRIGHTNESS;
+  msg2.buf[2] = KEYPAD_CMD_BACKLIGHT_BRIGHTNESS;
   msg2.buf[3] = KEYPAD_COLOR_OFF;
+  msg2.buf[4] = 0xFF;
+  msg2.buf[5] = 0xFF;
+  msg2.buf[6] = 0xFF;
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
+  // Set keypad LEDs to Off state
+  msg2.id = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04;
+  msg2.buf[1] = 0x1B;
+  msg2.buf[2] = KEYPAD_CMD_BACKLIGHT_COLOR;
+  msg2.buf[3] = KEYPAD_COLOR_AMBER;
   msg2.buf[4] = 0xFF;
   msg2.buf[5] = 0xFF;
   msg2.buf[6] = 0xFF;

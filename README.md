@@ -43,12 +43,11 @@ Step 1 — Wake (3 bytes):
 | 1 | `0x10` (`channelCount16`) | Number of cell channels (16) |
 | 2 | `0x02` (`numberOfDevices`) | Number of AFE ICs per module (2) |
 
-Step 2 — Enable continuous reporting (2 bytes, sent separately to each module):
+Step 2 — Enable continuous reporting (1 byte, sent separately to each module):
 
 | Byte | Value | Meaning |
 |------|-------|---------|
 | 0 | `0x10` (`contReportingEnable`) | Enable continuous cell voltage broadcast |
-| 1 | `0x10` (`channelCount16`) | Number of cell channels (16) |
 
 Step 3 — Send `0xFF0000` to trigger the first measurement cycle.
 
@@ -164,7 +163,7 @@ save
 | `0x626` | 30 ms | IVT-MOD power |
 | `0x627` | 30 ms | IVT-MOD coulomb counter |
 | `0x628` | 30 ms | IVT-MOD energy counter |
-| `0x18EFFF21` | 100 ms | CAN keypad button status |
+| `0x18EFFF21` | on event | CAN keypad button press / release |
 | `0xA100100` | on request | SIM100MOD isolation state / measurements |
 | `0x19A` | — | OpenInverter LDU status *(TODO: confirm ID from inverter `can tx` output)* |
 | `0x55A` | — | OpenInverter LDU faults *(TODO: confirm ID)* |
@@ -301,18 +300,27 @@ Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable s
 
 Keypad: RX `0x18EFFF21`, TX `0x18EF2100` (CAN2 @ 500 kbps)
 
-| Button | `buf[4]` mask | Label | Function |
-|--------|--------------|-------|----------|
-| 1 | `0x01` | Park | In Drive: return to Idle (speed = 0 required). In Idle/Charge/HeatPack/CoolPack/Fault: exit On State (speed = 0 required). |
-| 2 | `0x02` | Reverse | Set LDU direction to reverse |
-| 3 | `0x04` | Neutral | Set LDU direction to neutral |
-| 4 | `0x08` | Drive | In Idle: enter Drive state; set LDU direction to forward |
-| 5 | `0x10` | KL15 / Start | Enter On State (fires `KL15_ON`); one-shot — Park exits |
-| 6 | `0x20` | Speed Mode | *(undefined — reserved)* |
-| 7 | `0x40` | Auxiliary | *(undefined — reserved)* |
-| 8 | `0x80` | Drive Mode | *(undefined — reserved)* |
+Key Contact state message format (PKP2400SI J1939 §6, event-driven by default):
 
-Button states are event-driven (`buf[2] == 0xF9`). `buf[4] == 0x00` indicates no button pressed and resets edge-detection for button 5.
+| Byte | Value | Meaning |
+|------|-------|---------|
+| 0 | `0x04` | Header |
+| 1 | `0x1B` | Header |
+| 2 | `0x01` | Key Contact state command |
+| 3 | `1`–`8` | Key number |
+| 4 | `0x00` / `0x01` | Released / Pressed |
+| 5 | `0x21` | Keypad identifier |
+
+| Button | Label | Function |
+|--------|-------|----------|
+| 1 | Park | In Drive: return to Idle (speed = 0 required). In Idle/Charge/HeatPack/CoolPack/Fault: exit On State (speed = 0 required). |
+| 2 | Reverse | Set LDU direction to reverse |
+| 3 | Neutral | Set LDU direction to neutral |
+| 4 | Drive | In Idle: enter Drive state; set LDU direction to forward |
+| 5 | KL15 / Start | Enter On State (fires `KL15_ON`); one-shot — Park exits |
+| 6 | Speed Mode | *(undefined — reserved)* |
+| 7 | Auxiliary | *(undefined — reserved)* |
+| 8 | Drive Mode | *(undefined — reserved)* |
 
 ---
 
