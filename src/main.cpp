@@ -1101,29 +1101,6 @@ void Off_enter()
 {
   Serial.println("Entering Off state");
   VCUstate = VCU_STATE_OFF;
-
-  // Set keypad LEDs for Off state: buttons 1-7 off, button 8 amber blink (awaiting KL15)
-  msg2.id = 0x18EF2100;
-  msg2.flags.extended = 1;
-  msg2.len = 8;
-  msg2.buf[0] = 0x04;
-  msg2.buf[1] = 0x1B;
-  msg2.buf[5] = 0xFF;
-  msg2.buf[6] = 0xFF;
-  msg2.buf[7] = 0xFF;
-  for (uint8_t btn = 1; btn <= 7; btn++) {
-    msg2.buf[2] = KEYPAD_CMD_SET_LED;
-    msg2.buf[3] = btn;
-    msg2.buf[4] = KEYPAD_COLOR_OFF;
-    can2.write(msg2);
-  }
-  msg2.buf[2] = KEYPAD_CMD_SET_LED;
-  msg2.buf[3] = 0x08; // button 8 — drive mode, amber blink to indicate "waiting for KL15"
-  msg2.buf[4] = KEYPAD_COLOR_AMBER;
-  msg2.buf[5] = KEYPAD_MODE_BLINK;
-  msg2.buf[6] = 0x00;
-  msg2.buf[7] = 0xFF;
-  can2.write(msg2);
 }
 
 void Off_exit()
@@ -1775,6 +1752,47 @@ void setup() {
   fsm.add_transition(&state_HeatPack, &state_Idle,     TEMP_OK,   nullptr);
   fsm.add_transition(&state_CoolPack, &state_Idle,     TEMP_OK,   nullptr);
 
+  // Set keypad LEDs to Off state
+  msg2.id = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len = 8;
+  msg2.buf[0] = 0x04;
+  msg2.buf[1] = 0x1B;
+  msg2.buf[2] = KEYPAD_CMD_LIVE_BRIGHTNESS;
+  msg2.buf[3] = KEYPAD_COLOR_OFF;
+  msg2.buf[4] = 0xFF;
+  msg2.buf[5] = 0xFF;
+  msg2.buf[6] = 0xFF;
+  msg2.buf[7] = 0xFF;
+  can2.write(msg2);
+  Off_enter();
+  
+  // // Set all keypad buttons to amber at startup
+  // msg2.id = 0x18EF2100;//keypad button color command
+  // msg2.flags.extended = 1;
+  // msg2.len = 8;
+  // msg2.buf[0] = 0x04;
+  // msg2.buf[1] = 0x1B;
+  // msg2.buf[2] = KEYPAD_CMD_LIVE_BACKLIGHT_COLOR;
+  // msg2.buf[3] = KEYPAD_COLOR_AMBER;// Amber
+  // msg2.buf[4] = 0xFF;
+  // msg2.buf[5] = 0xFF;
+  // msg2.buf[6] = 0xFF;
+  // msg2.buf[7] = 0xFF;
+  // can2.write(msg2);
+  // // Set brightness of all keypad buttons to 50% at startup
+  // msg2.id = 0x18EF2100;
+  // msg2.flags.extended = 1;
+  // msg2.len = 8;
+  // msg2.buf[0] = 0x04;
+  // msg2.buf[1] = 0x1B;
+  // msg2.buf[2] = KEYPAD_CMD_LIVE_BRIGHTNESS;
+  // msg2.buf[3] = 0x20;// 50% brightness
+  // msg2.buf[4] = 0xFF;
+  // msg2.buf[5] = 0xFF;
+  // msg2.buf[6] = 0xFF;
+  // msg2.buf[7] = 0xFF;
+  // can2.write(msg2);
 }//end of setup()
 
 
