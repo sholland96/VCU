@@ -64,28 +64,8 @@ typedef enum {
 #define t2CallbackRate 200ms
 #define t3CallbackRate 1000ms
 
-//#define debug_loop_timing
-//#define TFT240_240_display
 #define UBLOX_GNSS
-//#define TCP_Interface
 //#define PMBBB32_DEBUG  // print all 0x18FF__ CAN1 frames + stale counters to Serial
-
-#ifdef TFT240_240_display
-#include <SPI.h>
-#include <ST7735_t3.h> // Hardware-specific library
-#include <ST7789_t3.h> // Hardware-specific library
-#include <ST7735_t3_font_Arial.h>
-
-#define TFT_RST    32   // chip reset
-#define TFT_DC     9   // tells the display if you're sending data (D) or commands (C)   --> WR pin on TFT
-#define TFT_MOSI   11  // Data out    (SPI standard)
-#define TFT_SCLK   13  // Clock out   (SPI standard)
-#define TFT_CS     10  // chip select (SPI standard)
-
-int LCD_BL = 33;       // LCD back light control
-
-ST7789_t3 tft = ST7789_t3(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
-#endif
 
 #ifdef UBLOX_GNSS
 #include <i2c_driver_wire.h>
@@ -101,21 +81,6 @@ ST7789_t3 tft = ST7789_t3(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 SFE_UBLOX_GNSS myGNSS;
 #endif
 
-#ifdef TCP_Interface
-#include <NativeEthernet.h>
-// Set the static IP to something other than INADDR_NONE (all zeros)
-// to not use DHCP. The values here are just examples.
-IPAddress localIP(192, 168, 1, 101);
-IPAddress targetIP(192, 168, 1, 102);
-IPAddress subnetMask{255, 255, 0, 0};
-IPAddress gateway{192, 168, 1, 1};
-uint16_t targetPort = 35000; // Port number on the target device
-
-EthernetServer server(targetPort);
-EthernetClient connectedClient;
-//EthernetUDP udpServer;
-#endif
-
 uint8_t pMBB32stale1;
 uint8_t pMBB32stale2;
 uint8_t pMBB32stale3;
@@ -125,8 +90,6 @@ uint32_t lastUpdatePMBB2 = 0;
 uint32_t lastUpdatePMBB3 = 0;
 
 uint8_t counter = 0;
-
-extern byte mac[];
 
 float ADCres = 0.000076293945;
 
@@ -263,10 +226,6 @@ uint8_t  pumpStatus;       // status byte
 uint8_t  pumpFaults;       // fault byte
 uint16_t pumpSetpoint;     // commanded speed (RPM)
 uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
-uint32_t callback_cell_sample_start;
-uint32_t callback_cell_sample_finish = 0;
-uint32_t callback_main_loop_start;
-uint32_t callback_main_loop_finish = 0;
 uint16_t rpm = 0;
 uint16_t power = 0;
 uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
@@ -338,26 +297,11 @@ uint8_t displayBuffer[16];
 unsigned int digitalPins = 0;
 int analogPins[7] = {0};
 
-typedef struct {
-  long id;
-  byte rtr;
-  byte ide;
-  byte dlc;
-  byte dataArray[8]; // Adjust the size to match your CAN messages
-} packet_t;
-
 void displayStatus();
-void callback_cells_pdu();
-void callback_cell_sample();
-void callback1000ms();
 
 void can1Sniff(const CAN_message_t);
 void can2Sniff(const CAN_message_t);
 void can3Sniff(const CAN_message_t);
-
-void teensyMAC(uint8_t *mac);
-void startEthernet();
-byte mac[] = {0x04, 0xE9, 0xE5, 0x17, 0xD2, 0x9E};
 
 void initCAN (int, int, int);
 void wakepMBB32();
@@ -369,18 +313,6 @@ void linInit();
 void linReadValve();
 void linWriteValve(uint8_t position);
 void readThrottle();
-
-#ifdef TCP_Interface
-void SendCANFrameToClient(unsigned long canFrameId);
-//void SendTextExtensionFrameToEth(unsigned long canFrameId, const char* text);
-void sendTestData();
-void SendCANFramesToEth(EthernetClient& client);
-void forwardAsRD44Frame(packet_t *packet, EthernetClient client);
-#endif
-
-void initCANframes(CAN_message_t *, CAN_message_t *);
-
-void displayStatus();
 
 void check_KL15();
 void check_PreCharge();

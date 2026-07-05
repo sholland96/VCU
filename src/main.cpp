@@ -149,9 +149,6 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
 *   4. Read isolation state from SIM100MOD
 */
 void callback_t2() {
-#ifdef debug_loop_timing
-  callback_cell_sample_start = millis();
-#endif
   // request all cell and temperature measurements every t2 period
   msg1.id = 0xFF0000;
   msg1.flags.extended = 1;
@@ -289,23 +286,7 @@ void callback_t2() {
 
   linReadValve();//poll BMW changeover valve over LIN (Serial3)
 
-  //SendCANFramesToEth(connectedClient);
-#ifdef debug_loop_timing
-  //callback_cell_sample_finish = millis() - callback_cell_sample_start;
-  tft.setFont(Arial_16);
-  tft.setCursor(160,152);
-  tft.fillRect(160,152,80,20,ST77XX_BLUE);
-  tft.println(millis() - callback_cell_sample_start);
-
-  if ((millis() - callback_cell_sample_start) > callback_cell_sample_finish) {
-    callback_cell_sample_finish = millis() - callback_cell_sample_start;
-    tft.setCursor(160,172);
-    tft.setFont(Arial_16);
-    tft.fillRect(160,172,80,20,ST77XX_BLUE);
-    tft.println(callback_cell_sample_finish);
-  }
-#endif
-}//end of callback_cell_sample()
+}//end of callback_t2()
 
 /* t3 Callback
 * This runs every 1000ms. 
@@ -315,25 +296,9 @@ void callback_t3() {
   //ReadAnalogStatuses();
   //groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;//convert mm/s to mph
   //GPSaltitude = myGNSS.getAltitudeMSL() / 3300;//feet
-#ifndef TFT240_240_display
   digitalToggleFast(LED_BUILTIN);
-#endif
 }//end of callback1000ms()
 
-#ifdef TCP_Interface
-void teensyMAC(uint8_t *mac) {
-    for(uint8_t by=0; by<2; by++) mac[by]=(HW_OCOTP_MAC1 >> ((1-by)*8)) & 0xFF;
-    for(uint8_t by=0; by<4; by++) mac[by+2]=(HW_OCOTP_MAC0 >> ((3-by)*8)) & 0xFF;
-    Serial.printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-}
-
-void startEthernet() {
-    // start the Ethernet connection and the server:
-    Ethernet.begin(mac, localIP);
-    server.begin();
-    //udpServer.begin(targetPort);
-}
-#endif
 /* CAN1 Receiver
 * This function processes messages received on CAN1.
 *   The pMBB32s are configured to broadcast cell voltages and temperatures at 100ms rate.
@@ -937,60 +902,8 @@ void displayStatus() {
   msg3.buf[7] = 0;
   can3.write(msg3);
 
-#ifdef TFT240_240_display
-  tft.setCursor(110,5);//Pack V is on line 5
-  tft.setTextColor(ST77XX_YELLOW);
-  tft.setFont(Arial_20);
-  tft.fillRect(110,5,100,30,ST77XX_BLUE);
-  tft.println((float)IVTpackVoltage/10, 1);//in mV
-  tft.setCursor(110,35);//Pack A is on line 35
-  tft.setFont(Arial_20);
-  tft.fillRect(110,35,100,30,ST77XX_BLUE);
-  tft.println((float)IVTpackCurrent/1000, 1);//in mA
-  tft.setCursor(110,65);//Pack power is on line 65
-  tft.setFont(Arial_20);
-  tft.fillRect(110,65,100,30,ST77XX_BLUE);
-  tft.println(IVTpower/1000, 2);//in Watts
-  tft.setCursor(110,95);//12V battery is on line 95
-  tft.setFont(Arial_20);
-  tft.fillRect(110,95,100,30,ST77XX_BLUE);
-  tft.println((float)batteryVoltage/100, 2);
-#endif
   digitalWriteFast(6, LOW);
 }//end of displayStatus()
-#ifdef TCP_Interface
-void SendCANFramesToEth(EthernetClient& client) {
-  //client.beginFrame(clientIP, staticIP, 32)
-      
-  packet_t rxPacket;
-  rxPacket.id = 0xC80;
-  //rxPacket.rtr = CAN.packetRtr() ? 1 : 0;
-  rxPacket.ide = msg3.flags.extended ? 1 : 0;
-  rxPacket.dlc = 8;
-  byte i = 0;
-  for(i = 0; i < rxPacket.dlc; i++) {
-    rxPacket.dataArray[i] = msg3.buf[i];
-    if (i >= (sizeof(rxPacket.dataArray) / (sizeof(rxPacket.dataArray[0])))) {
-      break;
-    }
-  }
-
-  // Forward the received packet as RealDash '44' frame to the connected client
-  forwardAsRD44Frame(&rxPacket, client);
-}
-
-void forwardAsRD44Frame(packet_t *packet, EthernetClient client) {
-  // RealDash '44' frame format:
-  // 4 bytes - 0x44,0x33,0x22,0x11
-  // 4 bytes - CAN frame id number (32bit little endian value)
-  // 8 bytes - CAN frame payload (data)
-
-  byte header[] = {0x44, 0x33, 0x22, 0x11};
-  client.write(header, 4);
-  client.write((byte *)&packet->id, 4);
-  client.write(packet->dataArray, 8);
-}
-#endif
 #ifdef UBLOX_GNSS
 void printPVTdata(UBX_NAV_PVT_data_t *ubxDataStruct)
 {
@@ -1293,6 +1206,8 @@ void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 
 // ── Sleep / wake ─────────────────────────────────────────────────────────────
 
+extern "C" uint32_t set_arm_clock(uint32_t frequency); // clockspeed.c
+
 void enterSleep() {
   Serial.println("KLR off — sleeping");
   Serial.flush();
@@ -1301,6 +1216,7 @@ void enterSleep() {
   t1.stop();  // TeensyTimerTool PeriodicTimer
   t2.stop();
   t3.stop();
+  digitalWriteFast(LED_BUILTIN, LOW);
 
 #ifdef UBLOX_GNSS
   // I2C cannot wake NEO-M8M from backup mode; EXTINT0 is the supported source.
@@ -1308,9 +1224,21 @@ void enterSleep() {
   delay(500);
 #endif
 
+  // Gate FlexCAN peripheral clocks — stops internal CAN controller sampling.
+  // Transceivers remain powered (STBY fixed low) but controller dynamic power stops.
+  // AIRCR reset on wake restores all CCM clock gates to boot defaults.
+  CCM_CCGR0 &= ~(CCM_CCGR0_CAN1(3) | CCM_CCGR0_CAN1_SERIAL(3) |
+                 CCM_CCGR0_CAN2(3) | CCM_CCGR0_CAN2_SERIAL(3));
+  CCM_CCGR7 &= ~(CCM_CCGR7_CAN3(3) | CCM_CCGR7_CAN3_SERIAL(3));
+
+  // Drop CPU to minimum (~16.2 MHz — ARM PLL minimum with max dividers).
+  // Passing any value < ~24 MHz hits the same PLL floor; DCDC already at 0.95 V.
+  // No restore needed: SCB_AIRCR reset below restores the boot clock.
+  set_arm_clock(16000000);
+
   // Halt CPU between SysTick interrupts (1 ms) until KLR returns high
   while (!digitalRead(KLR_PIN)) {
-    asm volatile("wfi"); // ARM Wait For Interrupt — CPU clock-gates until next IRQ
+    asm volatile("wfi");
   }
 
   asm volatile("dsb"); // flush pending memory writes before reset
@@ -1477,12 +1405,7 @@ void setup() {
   t0.priority(0);               // highest priority on ARM Cortex-M7 (0=highest, 255=lowest)
   t1.begin(callback_t1, t1CallbackRate); // start early: keeps CH2=0x05 refreshing every 62.5ms while PDU-8/pMBB32 boot
 
-#ifndef TFT240_240_display
-  pinMode(LED_BUILTIN, OUTPUT);//built-in LED or 240x240 TFT backlight
-#else
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);  // Turn LCD backlight on  
-#endif
+  pinMode(LED_BUILTIN, OUTPUT);
 
 #ifdef UBLOX_GNSS
   Wire.setClock(400 * 1000);//for U-blox GPS
@@ -1503,12 +1426,6 @@ void setup() {
   Serial.printf("saveConfig:    %s\n", myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT) ? "OK" : "FAIL");
   Serial.printf("setNavFreq:    %s\n", myGNSS.setNavigationFrequency(10) ? "OK" : "FAIL");
   Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
-#endif
-
-#ifdef TCP_Interface
-  // get mac address
-  //teensyMAC(mac);
-  //startEthernet();
 #endif
 
   delay(100);
@@ -1604,27 +1521,6 @@ void setup() {
   can2.write(msg2);
   delay(1); 
 
-#ifdef TFT240_240_display
-  tft.init(240, 240);
-  tft.setRotation(0);
-  tft.fillScreen(ST77XX_BLUE);
-
-  tft.setCursor(5,5);
-  tft.setTextColor(ST77XX_YELLOW);
-  tft.setFont(Arial_20);
-  tft.println("Pack V:");
-
-  tft.setCursor(5,35);
-  tft.println("Pack A:");
-  tft.setCursor(60 ,65);
-  tft.println("kW: ");
-  tft.setCursor(60 ,95);
-  tft.println("LV: ");
-
-  tft.setFont(Arial_12);
-  tft.setCursor(10,220);
-  tft.println("EK9 EV VCU");
-#endif
 /*
   // Set all keypad buttons to amber at startup
   msg2.id = 0x18EF2100;
@@ -1754,9 +1650,6 @@ void setup() {
 
 /* Main */
 void loop() {
-  // put your main code here, to run repeatedly:
-  
-  //callback_main_loop_start = millis();
   digitalWriteFast(3, HIGH);  
 
   can1.events();//Call to look for any input
@@ -1786,20 +1679,5 @@ void loop() {
 
 fsm.run_machine();
 
-#ifdef debug_loop_timing
-  //callback_main_loop_finish = millis() - callback_main_loop_start;
-  tft.setFont(Arial_16);
-  tft.setCursor(160,192);
-  tft.fillRect(160,192,80,20,ST77XX_BLUE);
-  tft.println(millis() - callback_main_loop_start);
-
-  if ((millis() - callback_main_loop_start) > callback_main_loop_finish) {
-    callback_main_loop_finish = millis() - callback_main_loop_start;
-    tft.setCursor(160,212);
-    tft.setFont(Arial_16);
-    tft.fillRect(160,212,80,20,ST77XX_BLUE);
-    tft.println(callback_main_loop_finish);
-  }
-#endif
   digitalWriteFast(3, LOW);
 }//end of loop()

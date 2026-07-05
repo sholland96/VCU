@@ -216,7 +216,7 @@ Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
 
 | Stage | Action |
 |-------|--------|
-| **1 Read** | `analogRead(A2)` and `analogRead(A3)` |
+| **1 Read** | `analogRead(A14)` (pin 38) and `analogRead(A15)` (pin 39) |
 | **2 Verify** | Cross-check tracks within 5 %; mismatch → throttle = 0 |
 | **3 Arbitrate** | Brake pedal pressed → 0; IVT or SIM fault active → clamp to 20 % |
 | **4 Map** | Linear 1:1 pedal % → `LDUtorqueSetpoint` (0–100); zero outside Drive state |
@@ -241,7 +241,7 @@ Key constants (`defines.h`):
 | 3 | Loop timing debug output |
 | 4 | CAN1 RX timing debug output |
 | 5 | CAN2 RX timing debug output |
-| 6 | Display timing debug output |
+| 6 | `displayStatus()` timing debug output |
 | 14 (TX3 / A0) | LIN bus TX |
 | 15 (RX3 / A1) | LIN bus RX |
 | 13 | Built-in LED (1 Hz heartbeat) |
@@ -263,7 +263,17 @@ The VCU uses two top-level regions separated by the physical key switch:
 
 Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the KL15 start button (keypad button 5).
 
-Turning the key off (KLR low) while in the Off state triggers `enterSleep()`: all timers stop, the GNSS module is put into backup mode via `UBX-RXM-PMREQ` (`powerOffWithInterrupt`, EXTINT0 wake source, ~15 µA), and the CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high. On wake, a rising edge is asserted on pin 33 (EXTINT0) to start the GNSS module's hot-start before the Teensy resets; a `dsb` barrier flushes pending writes, then `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals cleanly. The GNSS module completes its hot-start during Teensy setup() and is ready by the time `myGNSS.begin()` is called. Measured sleep current: ~61 mA (down from ~72 mA with GNSS active).
+Turning the key off (KLR low) while in the Off state triggers `enterSleep()`:
+
+1. All four timers stop; heartbeat LED is forced off.
+2. GNSS is put into backup mode via `UBX-RXM-PMREQ` (`powerOffWithInterrupt`, EXTINT0 wake source, ~15 µA).
+3. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling. The transceivers remain powered (STBY pins held low by the SK Pang board), but their digital logic goes idle.
+4. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum via maximum dividers; DCDC core voltage drops to 0.95 V). No restore is needed — `SCB_AIRCR` reset on wake returns the clock to 600 MHz.
+5. CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high.
+
+On wake, a rising edge is asserted on pin 33 (EXTINT0) to start the GNSS hot-start before the Teensy resets; a `dsb` barrier flushes pending writes, then `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals cleanly. The GNSS module completes its hot-start during Teensy `setup()` and is ready by the time `myGNSS.begin()` is called.
+
+**Measured sleep current: ~23 mA at 12 V** (external 90–95 % efficient 12 V → 5 V switcher + Teensy onboard 3.3 V LDO).
 
 ### On State (KL15 active)
 
@@ -356,7 +366,6 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 |---------|---------|
 | `luni64/TeensyTimerTool` | Periodic timer callbacks (RTC, GPT1, GPT2) |
 | `sparkfun/SparkFun u-blox GNSS Arduino Library` | GNSS / GPS |
-| `ssilverman/QNEthernet` | Ethernet (reserved, not currently active) |
 | `jonblack/arduino-fsm` | Finite state machine |
 | `gicking/LIN master portable` | LIN master on Serial3 |
 
