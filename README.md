@@ -247,7 +247,9 @@ Key constants (`defines.h`):
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
+| 32 | CAN transceiver standby (`CAN_STBY_PIN`) — driven HIGH during sleep to put all three transceivers into standby; requires hardware mod (lift STBY pins from GND on SK Pang board). No effect until mod is done. |
 | 33 | GNSS EXTINT (`GNSS_EXTINT_PIN`) — wire to SK Pang GNSS EXTINT header; pulsed HIGH before reset to wake module from backup |
+| 34 | TPS131PXQ1EVM-400 active pre-charge enable (`PRECHARGE_EN_PIN`) — driven HIGH during PreCharge state |
 | 35 (D35) | GNSS 1PPS (`GPS_PPS_PIN`) — blue LED indicator on SK Pang board |
 | A14 (pin 38) | Throttle pot 1 (EVWest dual-pot) |
 | A15 (pin 39) | Throttle pot 2 (EVWest dual-pot) |

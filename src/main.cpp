@@ -1063,12 +1063,14 @@ void PreCharge_enter() {
   VCUstate = VCU_STATE_PRECHARGE;
   preChargeStartTime = millis();
   PDUmsg1.buf[0] = 0x0D; // CH1 5A — negative contactor on
-  PDUmsg1.buf[2] = 0x05; // CH3 2A — pre-charge relay on
+  PDUmsg1.buf[2] = 0x05; // CH3 2A — passive pre-charge relay (remove when active pre-charge fitted)
+  digitalWrite(PRECHARGE_EN_PIN, HIGH); // TPS131PXQ1EVM-400 active pre-charge enable
 }
 
 void PreCharge_exit() {
   Serial.println("Exiting PreCharge state");
-  PDUmsg1.buf[2] = 0x00; // CH3 off — pre-charge relay off
+  PDUmsg1.buf[2] = 0x00; // CH3 off — passive pre-charge relay off
+  digitalWrite(PRECHARGE_EN_PIN, LOW);  // disable active pre-charge
 }
 
 void check_PreCharge() {
@@ -1224,6 +1226,9 @@ void enterSleep() {
   delay(500);
 #endif
 
+  // Assert CAN transceiver standby (no effect until hardware STBY mod is done).
+  digitalWrite(CAN_STBY_PIN, HIGH);
+
   // Gate FlexCAN peripheral clocks — stops internal CAN controller sampling.
   // Transceivers remain powered (STBY fixed low) but controller dynamic power stops.
   // AIRCR reset on wake restores all CCM clock gates to boot defaults.
@@ -1367,6 +1372,13 @@ void setup() {
   linInit();//BMW changeover valve LIN master on Serial3
 
   pinMode(KLR_PIN, INPUT_PULLDOWN); // KLR key position 1 — LOW = key off → sleep
+
+  pinMode(CAN_STBY_PIN, OUTPUT);
+  digitalWrite(CAN_STBY_PIN, LOW);    // transceivers active; HIGH in enterSleep() after hw mod
+
+  pinMode(PRECHARGE_EN_PIN, OUTPUT);
+  digitalWrite(PRECHARGE_EN_PIN, LOW); // pre-charge disabled until PreCharge state
+
 #ifdef UBLOX_GNSS
   pinMode(GNSS_EXTINT_PIN, OUTPUT);
   digitalWrite(GNSS_EXTINT_PIN, LOW); // idle low; pulsed high in enterSleep() to wake module
