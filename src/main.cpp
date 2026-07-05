@@ -5,12 +5,6 @@
 #include "pMBB32.h"
 #include "defines.h"
 #include "Fsm.h"
-//#include <Snooze.h>
-
-//SnoozeDigital digital;
-//SnoozeTimer timer;
-//SnoozeAlarm  alarm;
-//SnoozeBlock config_teensy40(alarm);
 
 using namespace TeensyTimerTool;
 IntervalTimer  t0;       // PIT channel — 10ms LDU torque command (highest priority)
@@ -853,12 +847,13 @@ void displayStatus() {
   if(rpm >= 13000)
     rpm = 0;
   
-  power += 5;
-  if(power >= 450)
+  IVTpackVoltage = 3840;
+
+  power += 1;
+  IVTpackCurrent = power * 1000000 / IVTpackVoltage;
+  if(power > 45)
     power = 0;
   
-  IVTpackVoltage = 3840;
-  //IVTpackCurrent = 5000;
   throttle = 100;
   batteryVoltage = 1255;
 
@@ -872,8 +867,8 @@ void displayStatus() {
   msg3.len = 8;
   msg3.buf[0] = rpm;//RPM = V
   msg3.buf[1] = rpm>>8;
-  msg3.buf[2] = power*10;//kW = V/10
-  msg3.buf[3] = (power*10)>>8;
+  msg3.buf[2] = power*100*10*134/10000;//kW = V/10
+  msg3.buf[3] = (power*100*10*134/10000)>>8;
   msg3.buf[4] = 21;//°C = V-100
   msg3.buf[5] = 0;
   msg3.buf[6] = throttle*10;//TPS = V/10
@@ -1059,11 +1054,11 @@ void Idle_enter()
 
 
   /* Send SMS
-  0 = send "KL30 connected" message
+  0 = send "KLR on" message
   1 = send "KL15 on" message
-  2 = send "Something happened..." message
-  3 = send "Charging stopped..." message
-  4 = send "Charging started..." message
+  2 = send "Pre-charge failed..." message
+  3 = send "Something happened..." message
+  4 = send "Charging stopped..." message
   5 = send "Temperature warning..." message
   any other value  = send "Invalid request..." message
   */
@@ -1280,6 +1275,28 @@ void on_trans_PreCharge_Charge()  { Serial.println("PreCharge OK → Charge"); }
 void on_trans_PreCharge_Fault()   { Serial.println("PreCharge FAILED → Fault"); }
 void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 
+// ── Sleep / wake ─────────────────────────────────────────────────────────────
+
+void enterSleep() {
+  Serial.println("KLR off — sleeping");
+  Serial.flush();
+
+  t0.end();   // IntervalTimer uses end()
+  t1.stop();  // TeensyTimerTool PeriodicTimer
+  t2.stop();
+  t3.stop();
+
+  // Halt CPU between SysTick interrupts (1 ms) until KLR returns high
+  while (!digitalRead(KLR_PIN)) {
+    asm volatile("wfi"); // ARM Wait For Interrupt — CPU clock-gates until next IRQ
+  }
+
+  // KLR back — reset so setup() re-initialises all peripherals cleanly
+  asm volatile("dsb"); // flush pending memory writes before reset
+  SCB_AIRCR = 0x05FA0004;
+  while (1); // stall until reset takes effect — should never reach next line
+}
+
 // ── Existing check functions ─────────────────────────────────────────────────
 
 void check_KL15()
@@ -1392,7 +1409,7 @@ void setup() {
 
   linInit();//BMW changeover valve LIN master on Serial3
 
-  //digital.pinMode(KLR_PIN, INPUT_PULLDOWN, RISING);// KLR wake pin — TODO: Teensy sleep/wakeup
+  pinMode(KLR_PIN, INPUT_PULLDOWN); // KLR key position 1 — LOW = key off → sleep
 
   initCAN(500000, 500000, 1000000);//start CAN1, CAN2, CAN3 at 500kbps, 500kbps, 1Mbps
   delay(100);
@@ -1728,9 +1745,10 @@ void loop() {
 
     //timer.setTimer(30);// seconds
 
-    // Feed the sleep function its wakeup parameters, then go to sleep.
-    //Snooze.sleep( config_teensy40 );// return module that woke processor
-
+  // KLR gone low (key off) while system is safe → hibernate
+  if (!digitalRead(KLR_PIN) && VCUstate == VCU_STATE_OFF) {
+    enterSleep();
+  }
 
 #ifdef UBLOX_GNSS
   myGNSS.checkUblox();    // returns on error if bus times out (5ms cap via setTimeout)

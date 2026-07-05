@@ -255,7 +255,7 @@ The VCU uses two top-level regions separated by the physical key switch:
 
 Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the KL15 start button (keypad button 5).
 
-Turning the key off (KLR_OFF) will eventually trigger a sleep/power-down sequence — *TODO: Teensy low-power implementation.*
+Turning the key off (KLR low) while in the Off state triggers `enterSleep()`: all timers stop and the CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high. On wake a `dsb` barrier flushes pending writes, then `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals cleanly. The GNSS module stays powered during sleep to ensure it restarts reliably.
 
 ### On State (KL15 active)
 
