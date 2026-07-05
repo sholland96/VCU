@@ -51,7 +51,14 @@ Step 2 — Enable continuous reporting (1 byte, sent separately to each module):
 
 Step 3 — Send `0xFF0000` to trigger the first measurement cycle.
 
-After startup, `0xFF0000` is sent every 200 ms to keep measurements running. If a module stops responding (stale counter > 50), the full wake + contReportingEnable sequence is re-sent automatically.
+After startup, `0xFF0000` is sent every 200 ms to keep measurements running.
+
+**Stale recovery** — each module has a counter incremented every 200 ms in `callback_t2()` and reset to 0 whenever a cell-voltage CAN frame arrives. If the counter exceeds 5 ticks (> 1 s without a frame), recovery begins:
+
+1. **Shutdown** — send `0x55` (shutdown) to the stale module.
+2. **Wake** — after 2 s, send wake + `contReportingEnable`; decrement retry credit.
+3. Steps 1–2 repeat up to 3 times per module.
+4. **CH2 power cycle** — if retries are exhausted, `PDUmsg1` CH2 is set to 0 (PDU-8 cuts power to all pMBB32s for 1 s), then restored. After a 3 s boot-settling wait, wake + `contReportingEnable` is sent to all three modules and retry credits reset. The cycle repeats indefinitely until all modules respond.
 | `0x0A0620` | Extended | PDU-8 driver settings — PDUmsg1 - channel current limits (sent every 62.5 ms) |
 | `0x0A0630` | Extended | PDU-8 driver outputs — PDUmsg2 - channel PWM duty cycles *(disabled, unverified)* |
 
@@ -240,6 +247,7 @@ Key constants (`defines.h`):
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
+| 33 | GNSS EXTINT (`GNSS_EXTINT_PIN`) — wire to SK Pang GNSS EXTINT header; pulsed HIGH before reset to wake module from backup |
 | 35 (D35) | GNSS 1PPS (`GPS_PPS_PIN`) — blue LED indicator on SK Pang board |
 | A14 (pin 38) | Throttle pot 1 (EVWest dual-pot) |
 | A15 (pin 39) | Throttle pot 2 (EVWest dual-pot) |
@@ -255,7 +263,7 @@ The VCU uses two top-level regions separated by the physical key switch:
 
 Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the KL15 start button (keypad button 5).
 
-Turning the key off (KLR low) while in the Off state triggers `enterSleep()`: all timers stop and the CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high. On wake a `dsb` barrier flushes pending writes, then `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals cleanly. The GNSS module stays powered during sleep to ensure it restarts reliably.
+Turning the key off (KLR low) while in the Off state triggers `enterSleep()`: all timers stop, the GNSS module is put into backup mode via `UBX-RXM-PMREQ` (`powerOffWithInterrupt`, EXTINT0 wake source, ~15 µA), and the CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high. On wake, a rising edge is asserted on pin 33 (EXTINT0) to start the GNSS module's hot-start before the Teensy resets; a `dsb` barrier flushes pending writes, then `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals cleanly. The GNSS module completes its hot-start during Teensy setup() and is ready by the time `myGNSS.begin()` is called. Measured sleep current: ~61 mA (down from ~72 mA with GNSS active).
 
 ### On State (KL15 active)
 

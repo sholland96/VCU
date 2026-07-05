@@ -93,7 +93,10 @@ ST7789_t3 tft = ST7789_t3(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 
 // SK Pang board: NEO-M8M GNSS on I2C0 — Wire (SDA=pin 18, SCL=pin 19)
 // 1PPS output from NEO-M8M is routed to Teensy pin 35 on the SK Pang board.
-#define GPS_PPS_PIN   35
+// EXTINT header on SK Pang board wired to this Teensy output — rising edge
+// wakes the module from backup mode before AIRCR reset.
+#define GPS_PPS_PIN       35
+#define GNSS_EXTINT_PIN   33  // free GPIO — wire to NEO-M8M EXTINT header on SK Pang board
 
 SFE_UBLOX_GNSS myGNSS;
 #endif

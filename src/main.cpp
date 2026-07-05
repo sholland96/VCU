@@ -136,7 +136,7 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
   }
   counter++;
   //delay(1);
-  if (VCUstate != VCU_STATE_OFF && VCUstate != VCU_STATE_FAULT)
+  if (VCUstate != VCU_STATE_FAULT)//(VCUstate != VCU_STATE_OFF && VCUstate != VCU_STATE_FAULT)
     displayStatus(); // update RealDash
 }//end of callback_cells_pdu()
 
@@ -190,52 +190,75 @@ void callback_t2() {
   }
 #endif
 
-  // Stale recovery: non-blocking shutdown → 2 s delay → wake + contReportingEnable.
-  // Phase 0 = idle, 1 = shutdown sent (waiting 2 s), 2 = wake pending.
+  // Stale recovery: per-module shutdown→wake, escalating to PDU CH2 power cycle.
   {
     static struct {
       uint8_t  *stale;
       uint32_t  id;
       uint8_t   num;
-      uint8_t   phase;    // 0=idle, 1=awaiting 2s after shutdown
+      uint8_t   phase;       // 0=idle, 1=awaiting 2s after shutdown
       uint32_t  phaseTime;
+      uint8_t   retryCount;  // failed wake attempts before escalating
     } mods[] = {
-      {&pMBB32stale1, 0xAF0100, 1, 0, 0},
-      {&pMBB32stale2, 0xAF0200, 2, 0, 0},
-      {&pMBB32stale3, 0xAF0300, 3, 0, 0},
+      {&pMBB32stale1, 0xAF0100, 1, 0, 0, 0},
+      {&pMBB32stale2, 0xAF0200, 2, 0, 0, 0},
+      {&pMBB32stale3, 0xAF0300, 3, 0, 0, 0},
     };
-    bool anyWoke = false;
+
+    // CH2 power cycle — state 0=idle, 1=CH2 off (1s), 2=CH2 on (2s boot wait)
+    static struct { uint8_t state; uint32_t t; } ch2 = {0, 0};
+
     msg1.flags.extended = 1;
-    for (auto &m : mods) {
-      if (m.phase == 0 && *m.stale > 5) {
-        *m.stale = 0;
-        Serial.printf("pMBB32 #%u stale — sending shutdown\n", m.num);
-        msg1.id = m.id;
-        msg1.len = 1;
-        msg1.buf[0] = shutdown; // 0x55
+
+    if (ch2.state == 1 && millis() - ch2.t >= 1000) {
+      Serial.println("PDU CH2 restored — waiting for pMBB32 boot");
+      PDUmsg1.buf[1] = 0x05;         // t1 picks this up and keeps CH2 live
+      ch2.state = 2;
+      ch2.t = millis();
+    } else if (ch2.state == 2 && millis() - ch2.t >= 3000) {
+      Serial.println("pMBB32 power cycle complete — waking all modules");
+      for (auto &m : mods) {
+        msg1.id = m.id; msg1.len = 3;
+        msg1.buf[0] = wakeup; msg1.buf[1] = channelCount16; msg1.buf[2] = numberOfDevices;
         can1.write(msg1);
-        m.phase = 1;
-        m.phaseTime = millis();
-      } else if (m.phase == 1 && millis() - m.phaseTime >= 2000) {
-        Serial.printf("pMBB32 #%u — sending wake + contReportingEnable\n", m.num);
-        msg1.id = m.id;
-        msg1.len = 3;
-        msg1.buf[0] = wakeup;
-        msg1.buf[1] = channelCount16;
-        msg1.buf[2] = numberOfDevices;
-        can1.write(msg1);
-        msg1.len = 1;
+      }
+      for (auto &m : mods) {
+        msg1.id = m.id; msg1.len = 1;
         msg1.buf[0] = contReportingEnable;
         can1.write(msg1);
-        m.phase = 0;
-        anyWoke = true;
+      }
+      msg1.id = 0xFF0000; msg1.len = 0; can1.write(msg1);
+      for (auto &m : mods) { *m.stale = 0; m.phase = 0; m.retryCount = 0; }
+      ch2.state = 0;
+    }
+
+    bool anyWoke = false;
+    if (ch2.state == 0) {
+      for (auto &m : mods) {
+        if (m.phase == 0 && *m.stale > 5) {
+          if (m.retryCount >= 3) {
+            Serial.printf("pMBB32 #%u exhausted retries — cycling PDU CH2\n", m.num);
+            PDUmsg1.buf[1] = 0;      // t1 keeps CH2 off every 62.5ms until restored
+            ch2.state = 1; ch2.t = millis();
+            for (auto &mm : mods) { *mm.stale = 0; mm.phase = 0; mm.retryCount = 0; }
+            break;
+          }
+          *m.stale = 0;
+          Serial.printf("pMBB32 #%u stale — sending shutdown\n", m.num);
+          msg1.id = m.id; msg1.len = 1; msg1.buf[0] = shutdown;
+          can1.write(msg1);
+          m.phase = 1; m.phaseTime = millis();
+        } else if (m.phase == 1 && millis() - m.phaseTime >= 2000) {
+          Serial.printf("pMBB32 #%u — sending wake + contReportingEnable\n", m.num);
+          msg1.id = m.id; msg1.len = 3;
+          msg1.buf[0] = wakeup; msg1.buf[1] = channelCount16; msg1.buf[2] = numberOfDevices;
+          can1.write(msg1);
+          msg1.len = 1; msg1.buf[0] = contReportingEnable; can1.write(msg1);
+          *m.stale = 0; m.retryCount++; m.phase = 0; anyWoke = true;
+        }
       }
     }
-    if (anyWoke) {
-      msg1.id = 0xFF0000;
-      msg1.len = 0;
-      can1.write(msg1);
-    }
+    if (anyWoke) { msg1.id = 0xFF0000; msg1.len = 0; can1.write(msg1); }
   }
 
   msg2.id = 0xA100101;//send SIM100MOD Request Isolation State command
@@ -971,22 +994,15 @@ void forwardAsRD44Frame(packet_t *packet, EthernetClient client) {
 #ifdef UBLOX_GNSS
 void printPVTdata(UBX_NAV_PVT_data_t *ubxDataStruct)
 {
-    //Serial.println();
+    GPSaltitude = ubxDataStruct->hMSL;
+    groundSpeed = ubxDataStruct->gSpeed;
+    fixType     = ubxDataStruct->fixType;
 
-    // TODO: re-enable Serial printing once display/logging is implemented
-    GPSaltitude = ubxDataStruct->hMSL; // Print the height above mean sea level
-    //Serial.print(F(" Height above MSL: "));
-    //Serial.print(GPSaltitude);
-    //Serial.print(F(" (mm)"));
-
-    groundSpeed = ubxDataStruct->gSpeed; // Print the ground speed
-    //Serial.print(F(" Ground speed: "));
-    //Serial.print(groundSpeed);
-    //Serial.println(F(" (mm/s)"));
-    fixType = ubxDataStruct->fixType; // Print the GNSS fix type
-    //Serial.print(F(" Fix type: "));
-    //Serial.print(fixType);
-    //Serial.println(F(" (0=no fix, 1=dead reckoning only, 2=2D-fix, 3=3D-fix, 4=GNSS + dead reckoning, 5=time only fix)"));
+    static uint32_t lastPrint = 0;
+    if (millis() - lastPrint >= 5000) {
+      lastPrint = millis();
+      Serial.printf("GNSS fix=%u SIV=%u\n", fixType, ubxDataStruct->numSV);
+    }
 }
 #endif
 // State transition functions
@@ -1286,15 +1302,28 @@ void enterSleep() {
   t2.stop();
   t3.stop();
 
+#ifdef UBLOX_GNSS
+  // I2C cannot wake NEO-M8M from backup mode; EXTINT0 is the supported source.
+  myGNSS.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_EXTINT0);
+  delay(500);
+#endif
+
   // Halt CPU between SysTick interrupts (1 ms) until KLR returns high
   while (!digitalRead(KLR_PIN)) {
     asm volatile("wfi"); // ARM Wait For Interrupt — CPU clock-gates until next IRQ
   }
 
-  // KLR back — reset so setup() re-initialises all peripherals cleanly
   asm volatile("dsb"); // flush pending memory writes before reset
+
+#ifdef UBLOX_GNSS
+  // Rising edge on EXTINT0 wakes the GNSS module; it will hot-start and begin
+  // navigating while the Teensy is resetting and running setup().
+  digitalWrite(GNSS_EXTINT_PIN, HIGH);
+  delay(50);
+#endif
+
   SCB_AIRCR = 0x05FA0004;
-  while (1); // stall until reset takes effect — should never reach next line
+  while (1);
 }
 
 // ── Existing check functions ─────────────────────────────────────────────────
@@ -1410,12 +1439,43 @@ void setup() {
   linInit();//BMW changeover valve LIN master on Serial3
 
   pinMode(KLR_PIN, INPUT_PULLDOWN); // KLR key position 1 — LOW = key off → sleep
+#ifdef UBLOX_GNSS
+  pinMode(GNSS_EXTINT_PIN, OUTPUT);
+  digitalWrite(GNSS_EXTINT_PIN, LOW); // idle low; pulsed high in enterSleep() to wake module
+#endif
 
   initCAN(500000, 500000, 1000000);//start CAN1, CAN2, CAN3 at 500kbps, 500kbps, 1Mbps
   delay(100);
 
+  // Power up pMBB32 modules via PDU-8 CH2 as early as possible so they have
+  // time to boot (GNSS init below takes ~300-500ms — used as free settling time)
+  PDUmsg1.id = 0x0A0620;
+  PDUmsg1.len = 8;
+  PDUmsg1.buf[0] = 0;     // CH1 — negative contactor (off)
+  PDUmsg1.buf[1] = 0x05;  // CH2 — pMBB32 modules 2A
+  PDUmsg1.buf[2] = 0;     // CH3 — positive pre-charge (off)
+  PDUmsg1.buf[3] = 0;     // CH4 — positive contactor (off)
+  PDUmsg1.buf[4] = 0;
+  PDUmsg1.buf[5] = 0;
+  PDUmsg1.buf[6] = 0;
+  PDUmsg1.buf[7] = 0;
+  can1.write(PDUmsg1);
+
+  PDUmsg2.id = 0x0A0630;
+  PDUmsg2.len = 8;
+  PDUmsg2.buf[0] = 0;
+  PDUmsg2.buf[1] = 0xFE;  // CH2 — pMBB32
+  PDUmsg2.buf[2] = 0;
+  PDUmsg2.buf[3] = 0;
+  PDUmsg2.buf[4] = 0;
+  PDUmsg2.buf[5] = 0;
+  PDUmsg2.buf[6] = 0;
+  PDUmsg2.buf[7] = 0;
+  can1.write(PDUmsg2);
+
   t0.begin(callback_t0, 10000); // 10ms LDU torque command loop
   t0.priority(0);               // highest priority on ARM Cortex-M7 (0=highest, 255=lowest)
+  t1.begin(callback_t1, t1CallbackRate); // start early: keeps CH2=0x05 refreshing every 62.5ms while PDU-8/pMBB32 boot
 
 #ifndef TFT240_240_display
   pinMode(LED_BUILTIN, OUTPUT);//built-in LED or 240x240 TFT backlight
@@ -1427,26 +1487,22 @@ void setup() {
 #ifdef UBLOX_GNSS
   Wire.setClock(400 * 1000);//for U-blox GPS
   Wire.begin();
-  Wire.setTimeout(5);              // 5ms transaction timeout (I2CDriverWire API)
-  
+  Wire.setTimeout(50);             // 50ms — backup-wake I2C responses are slower
+
+  // GNSS was woken via EXTINT rising edge in enterSleep() before AIRCR reset;
+  // it hot-starts during Teensy setup().  Just wait for I2C to respond.
   while (myGNSS.begin() == false)
   {
-    Serial.println(F("u-blox GNSS not detected at default I2C address. Please check wiring. Freezing."));
-    //while (1);
-    myGNSS.hardReset();
+    Serial.println(F("u-blox GNSS not detected — retrying"));
     delay(500);
   }
-  
-  myGNSS.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA); //Set the I2C port to output both NMEA and UBX messages
-  //This will pipe all NMEA sentences to the serial port so we can see them
-  //myGNSS.setNMEAOutputPort(Serial);
 
-  myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); //Save (only) the communications port settings to flash and BBR
-  //myGNSS.setNMEAOutputPort(SerialUSB);
-  myGNSS.setNavigationFrequency(10); //Set output to 10 times a second
-  //myGNSS.setAutoPVT(true);
-  myGNSS.setAutoPVTcallbackPtr(&printPVTdata); // Enable automatic NAV PVT messages with callback to printPVTdata
-  //myGNSS.setAutoNAVSATcallbackPtr(&newNAVSAT); // Enable automatic NAV SAT messages with callback to newNAVSAT
+  Serial.println("GNSS online");
+
+  Serial.printf("setI2COutput:  %s\n", myGNSS.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA) ? "OK" : "FAIL");
+  Serial.printf("saveConfig:    %s\n", myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT) ? "OK" : "FAIL");
+  Serial.printf("setNavFreq:    %s\n", myGNSS.setNavigationFrequency(10) ? "OK" : "FAIL");
+  Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
 #endif
 
 #ifdef TCP_Interface
@@ -1455,34 +1511,6 @@ void setup() {
   //startEthernet();
 #endif
 
-  //send PDU-8 driver settings - without sending 0x0A0630, this is simple ON/OFF control
-  PDUmsg1.id = 0x0A0620;
-  PDUmsg1.len = 8;
-  PDUmsg1.buf[0] = 0;//channel 1 current limit 5A (5/0.4A = 13 or 0x0D) - negative contactor
-  PDUmsg1.buf[1] = 0x05;//channel 2 current limit 2A (2/0.4A = 5) - pMBB32s
-  PDUmsg1.buf[2] = 0;//channel 3 current limit 2A (2/0.4A = 5) - positive pre-charge
-  PDUmsg1.buf[3] = 0;//channel 4 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
-  PDUmsg1.buf[4] = 0;
-  PDUmsg1.buf[5] = 0;
-  PDUmsg1.buf[6] = 0;
-  PDUmsg1.buf[7] = 0; 
-  can1.write(PDUmsg1);
-  delay(1);
-
-  //send PDU-8 driver outputs - only used for PWM control (unverified)
-  PDUmsg2.id = 0x0A0630;
-  PDUmsg2.len = 8;
-  PDUmsg2.buf[0] = 0;//channel 1 - negative contactor
-  PDUmsg2.buf[1] = 0xFE;//channel 2 - pMBB32
-  PDUmsg2.buf[2] = 0;//channel 3 - positive pre-charge relay
-  PDUmsg2.buf[3] = 0;//channel 4 - positive contac 
-  PDUmsg2.buf[4] = 0;
-  PDUmsg2.buf[5] = 0;
-  PDUmsg2.buf[6] = 0;
-  PDUmsg2.buf[7] = 0; 
-  can1.write(PDUmsg2);
-
-  t1.begin(callback_t1, t1CallbackRate);
   delay(100);
   wakepMBB32();
 
@@ -1751,9 +1779,9 @@ void loop() {
   }
 
 #ifdef UBLOX_GNSS
-  myGNSS.checkUblox();    // returns on error if bus times out (5ms cap via setTimeout)
+  myGNSS.checkUblox();
   myGNSS.checkCallbacks();
-  // I2CDriverWire has no timeout-flag API; timeout errors surface as transaction failures
+
 #endif
 
 fsm.run_machine();
