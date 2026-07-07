@@ -286,6 +286,22 @@ void callback_t2() {
 
   linReadValve();//poll BMW changeover valve over LIN (Serial3)
 
+  // EMP WP29 pump command — must be sent ≥ 1 Hz; t2 fires every 200 ms.
+  // Percent Speed Command: byte 3 = setpoint% × 2 (0.5 %/bit).
+  // Unused Motor Speed Command bytes set to 0xFF per spec.
+  msg2.id             = EMP_WP29_CMD_ID;
+  msg2.flags.extended = 1;
+  msg2.len            = 8;
+  msg2.buf[0]         = (pumpSetpoint > 0) ? 0xFD : 0xFC;  // Motor On (fwd) or Off
+  msg2.buf[1]         = 0xFF;  // Motor Speed Command unused (using Percent)
+  msg2.buf[2]         = 0xFF;
+  msg2.buf[3]         = (uint8_t)(pumpSetpoint * 2);        // 0.5 %/bit
+  msg2.buf[4]         = 0xFF;
+  msg2.buf[5]         = 0xFF;
+  msg2.buf[6]         = 0xFF;
+  msg2.buf[7]         = 0xFF;
+  can2.write(msg2);
+
 }//end of callback_t2()
 
 /* t3 Callback
@@ -575,14 +591,23 @@ void can2Sniff(const CAN_message_t &msg) {
       LDUfaults = (msg.buf[0]<<8) | msg.buf[1];// TODO: confirm byte map
       break;
 
-    /* EMP WP29-12V-CV-A Water Pump -----------------------------
-     * Status broadcast: 0xFBFE (64510) extended, 500kbps
-     * TODO: confirm byte map / scaling from datasheet
+    /* EMP WP29-12V-CV-A Water Pump -------------------------------------------
+     * Motor Status Message 1: ID = 0x18FF03{pump_addr}, 1 Hz — confirmed via DBC
+     * Motor Status Message 3: ID = 0x18FF24{pump_addr}, 100 ms (voltage/current/HVIL)
+     * EMP proprietary protocol — 9980001068 Rev. N
      */
-    case 0xFBFE://pump status broadcast
-      pumpActualSpeed = (msg.buf[0]<<8) | msg.buf[1];// TODO: confirm byte map / scaling
-      pumpStatus      = msg.buf[2];                  // TODO: confirm byte
-      pumpFaults      = msg.buf[3];                  // TODO: confirm byte
+    case EMP_WP29_STATUS1:
+      // byte 0: bits[1:0]=direction, bits[5:2]=controller_status, bits[7:6]=command_src
+      pumpStatus      = (msg.buf[0] >> 2) & 0x0F;
+      // bytes 1-2: measured speed, little-endian uint16, 0.5 rpm/bit
+      pumpActualSpeed = ((uint16_t)msg.buf[2] << 8) | msg.buf[1];
+      // byte 7: bits[1:0]=service_indicator, bits[3:2]=operation_status
+      pumpFaults      = msg.buf[7] & 0x0F;
+      break;
+    case EMP_WP29_STATUS3:
+      // bytes 0-1: motor voltage (little-endian, 0.05 V/bit)
+      // bytes 2-3: motor current (little-endian, 0.05 A/bit, offset -1600)
+      // byte 4 bit 0: HVIL status (0=OK, 1=open)
       break;
 
   }
@@ -1514,24 +1539,24 @@ void setup() {
   //delay(1);
 
   /* EMP WP29-12V-CV-A Water Pump init ---------------------------------------
-   * Command frame: 0x7A00 (31232) extended, 500kbps
-   * Send initial speed setpoint (0 RPM / off) to pump.
-   * TODO: confirm byte map / scaling from datasheet.
+   * Motor Command Message: 0x18EF{pump_addr}{vcu_addr}, extended, 500kbps
+   * Send Motor Off command at startup; periodic commands via callback_t2().
+   * EMP proprietary protocol — 9980001068 Rev. N
    */
-  pumpSetpoint = 0;
-  msg2.id = 0x7A00;
+  pumpSetpoint        = 0;
+  msg2.id             = EMP_WP29_CMD_ID;
   msg2.flags.extended = 1;
-  msg2.len = 8;
-  msg2.buf[0] = pumpSetpoint >> 8;  // TODO: confirm byte map / scaling
-  msg2.buf[1] = pumpSetpoint & 0xFF;
-  msg2.buf[2] = 0;
-  msg2.buf[3] = 0;
-  msg2.buf[4] = 0;
-  msg2.buf[5] = 0;
-  msg2.buf[6] = 0;
-  msg2.buf[7] = 0;
+  msg2.len            = 8;
+  msg2.buf[0]         = 0xFC;  // Motor Off + Don't Care power hold
+  msg2.buf[1]         = 0xFF;  // Motor Speed Command unused (using Percent)
+  msg2.buf[2]         = 0xFF;
+  msg2.buf[3]         = 0x00;  // 0 % speed
+  msg2.buf[4]         = 0xFF;
+  msg2.buf[5]         = 0xFF;
+  msg2.buf[6]         = 0xFF;
+  msg2.buf[7]         = 0xFF;
   can2.write(msg2);
-  delay(1); 
+  delay(1);
 
 /*
   // Set all keypad buttons to amber at startup

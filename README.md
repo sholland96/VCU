@@ -115,7 +115,7 @@ Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU (v5 board), EMP 
 |----|------|------|-------------|
 | `0x412` | Standard | on demand | IVT-MOD command (SET_MODE, configure measurements) |
 | `0xA100101` | Extended | 200 ms | SIM100MOD isolation poll |
-| `0x7A00` | Extended | 200 ms | EMP WP29 pump speed setpoint *(stub)* |
+| `0x18EF{pump}{vcu}` | Extended | 200 ms | EMP WP29 pump Motor Command (byte 0: 0xFD=on/0xFC=off; byte 3: %×2) |
 | `0x18EF2100` | Extended | on demand | CAN keypad LED colour / mode command |
 | `0x201` | Standard | **10 ms** | OpenInverter LDU fixed safety frame (see below) |
 
@@ -174,7 +174,8 @@ save
 | `0xA100100` | on request | SIM100MOD isolation state / measurements |
 | `0x19A` | — | OpenInverter LDU status *(TODO: confirm ID from inverter `can tx` output)* |
 | `0x55A` | — | OpenInverter LDU faults *(TODO: confirm ID)* |
-| `0xFBFE` | — | EMP WP29 pump actual speed / status *(stub)* |
+| `0x18FF03{pump}` | 1 Hz | EMP WP29 Motor Status Message 1 (speed, temp, power, controller status) |
+| `0x18FF24{pump}` | 100 ms | EMP WP29 Motor Status Message 3 (voltage, current, HVIL status) |
 
 ---
 
@@ -379,7 +380,7 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 - **OpenInverter CRC** — implement `crc_calculate_block` equivalent and set `controlcheck 1` on inverter once formula is confirmed from stm32-sine source
 - **Brake calibration** — bench-calibrate `BRAKE_THRESHOLD` (currently 200 / 4095 ADC counts) against actual sensor output
 - **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` constants
-- **EMP WP29 pump** — confirm byte map from datasheet; implement speed setpoint loop
+- **EMP WP29 pump** — confirm pump J1939 source address (`EMP_WP29_ADDR` in defines.h, currently `0x8A`) via CAN sniffer or DBC file; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
 - **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
 - **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-MOD U2 (pre-charge voltage)
 - **Regen braking** — implement `pot2` / `regenpreset` fields in the LDU frame; wire to brake pressure or paddle

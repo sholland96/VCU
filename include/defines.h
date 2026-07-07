@@ -227,13 +227,27 @@ uint8_t  valveStatus   = 0;     // last reported status byte
 bool     valveOnline   = false; // true once first valid response received
 
 // EMP WP29-12V-CV-A Smart Flow Water Pump (CAN2 @ 500kbps)
-// TX to pump:   0x7A00  (31232) speed setpoint (extended)
-// RX from pump: 0xFBFE  (64510) status / actual speed (extended)
-// TODO: confirm byte map / scaling from datasheet
-uint16_t pumpActualSpeed;  // actual pump speed (RPM)
-uint8_t  pumpStatus;       // status byte
-uint8_t  pumpFaults;       // fault byte
-uint16_t pumpSetpoint;     // commanded speed (RPM)
+// Command (VCU → pump): EMP proprietary Motor Command Message
+//   TX ID = 0x18EF{pump_addr}{vcu_addr} — byte 0: On/Off+PowerHold; bytes 1-2: 0xFFFF;
+//   byte 3: %speed × 2 (0.5 %/bit); bytes 4-7: 0xFF. Must send ≥ 1 Hz.
+//   On/Off byte: 0xFD = Motor On (forward) + DNC Power Hold; 0xFC = Motor Off + DNC
+// Status (pump → VCU): Motor Status Message 2 @ 0x18FF23{pump_addr} (1 Hz)
+//   byte 0: bits[1:0]=direction, bits[5:2]=controller_status, bits[7:6]=command_src
+//   bytes 1-2: measured speed (little-endian uint16, 0.5 rpm/bit)
+//   bytes 3-4: external temp (little-endian int16, 0.03125 °C/bit, offset −273)
+//   bytes 5-6: motor power (little-endian uint16, 0.5 W/bit)
+//   byte 7: bits[1:0]=service_indicator, bits[3:2]=operation_status
+// Motor Status Message 3 @ 0x18FF24{pump_addr} (100 ms): voltage, current, HVIL
+// Source addresses: confirm pump address via CAN sniffer or DBC file.
+#define EMP_WP29_ADDR    0x8Au   // pump J1939 source address — verify via DBC/sniffer
+#define VCU_CAN_ADDR     0xA3u   // VCU J1939 source address
+#define EMP_WP29_CMD_ID  (0x18EF0000UL | ((uint32_t)EMP_WP29_ADDR << 8) | VCU_CAN_ADDR)
+#define EMP_WP29_STATUS1 (0x18FF0300UL | EMP_WP29_ADDR)  // Motor Status Message 1 (1 Hz) — confirmed via DBC
+#define EMP_WP29_STATUS3 (0x18FF2400UL | EMP_WP29_ADDR)  // Motor Status Message 3 (100 ms)
+uint16_t pumpActualSpeed;  // raw measured speed (0.5 rpm/bit — divide by 2 for RPM)
+uint8_t  pumpStatus;       // controller status nibble (byte 0 bits[5:2] of Status Msg 2)
+uint8_t  pumpFaults;       // service indicator [1:0] + operation status [3:2] (byte 7)
+uint8_t  pumpSetpoint;     // commanded speed 0–100 %
 uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
 uint16_t rpm = 0;
 uint16_t power = 0;
