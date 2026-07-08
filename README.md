@@ -269,15 +269,16 @@ Turning the key to position 1 (KLR) powers up the Teensy, display and all contro
 Turning the key off (KLR low) while in the Off state triggers `enterSleep()`:
 
 1. All four timers stop; heartbeat LED is forced off.
-2. GNSS is put into backup mode via `UBX-RXM-PMREQ` (`powerOffWithInterrupt`, EXTINT0 wake source, ~15 µA).
-3. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling.
-4. `CAN_STBY_PIN` (pin 32) is driven HIGH — all three CAN transceivers enter standby mode (STBY pins lifted from GND on SK Pang board and wired to pin 32).
-5. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum via maximum dividers; DCDC core voltage drops to 0.95 V). No restore is needed — `SCB_AIRCR` reset on wake returns the clock to 600 MHz.
-6. CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high.
+2. USB PHY is powered down (`USBPHY1_PWD = 0xFFFFFFFF`) and its CCM clock gated.
+3. GNSS is put into backup mode via `UBX-RXM-PMREQ` (`powerOffWithInterrupt`, EXTINT0 wake source, ~15 µA).
+4. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling.
+5. `CAN_STBY_PIN` (pin 32) is driven HIGH — all three CAN transceivers enter standby mode.
+6. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum; DCDC core voltage drops to 0.95 V), then AHB is switched to the 24 MHz crystal, ARM PLL bypass is enabled (CPU runs at crystal / ARM_PODF ≈ 3 MHz), and the ARM PLL VCO is powered down.
+7. A rising-edge GPIO interrupt is attached to `KLR_PIN`; SysTick is disabled; a single `wfi` sleeps the CPU until KLR rises (no 1 ms SysTick wakeups).
 
-On wake, a rising edge is asserted on pin 33 (EXTINT0) to start the GNSS hot-start before the Teensy resets; a `dsb` barrier flushes pending writes, then `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals cleanly. The GNSS module completes its hot-start during Teensy `setup()` and is ready by the time `myGNSS.begin()` is called.
+On wake, a rising edge is asserted on pin 33 (EXTINT0) via DWT cycle-counter delay to start the GNSS hot-start before the Teensy resets; `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals (including clock restoration) cleanly.
 
-**Measured sleep current: ~15 mA at 12 V** (external 90–95 % efficient 12 V → 5 V switcher + Teensy onboard 3.3 V LDO). Down from ~61 mA before sleep optimisations.
+**Measured sleep current: ~12 mA at 12 V** (external 90–95 % efficient 12 V → 5 V switcher + Teensy onboard 3.3 V LDO). Down from ~61 mA before sleep optimisations.
 
 ### On State (KL15 active)
 

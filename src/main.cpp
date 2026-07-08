@@ -1239,6 +1239,10 @@ void enterSleep() {
   Serial.println("KLR off — sleeping");
   Serial.flush();
 
+  // 1. Power down USB PHY and gate its clock — restores automatically on AIRCR reset.
+  USBPHY1_PWD    = 0xFFFFFFFF;
+  CCM_CCGR6     &= ~CCM_CCGR6_USBOH3(3);
+
   t0.end();   // IntervalTimer uses end()
   t1.stop();  // TeensyTimerTool PeriodicTimer
   t2.stop();
@@ -1255,29 +1259,51 @@ void enterSleep() {
   digitalWrite(CAN_STBY_PIN, HIGH);
 
   // Gate FlexCAN peripheral clocks — stops internal CAN controller sampling.
-  // Transceivers remain powered (STBY fixed low) but controller dynamic power stops.
   // AIRCR reset on wake restores all CCM clock gates to boot defaults.
   CCM_CCGR0 &= ~(CCM_CCGR0_CAN1(3) | CCM_CCGR0_CAN1_SERIAL(3) |
                  CCM_CCGR0_CAN2(3) | CCM_CCGR0_CAN2_SERIAL(3));
   CCM_CCGR7 &= ~(CCM_CCGR7_CAN3(3) | CCM_CCGR7_CAN3_SERIAL(3));
 
-  // Drop CPU to minimum (~16.2 MHz — ARM PLL minimum with max dividers).
-  // Passing any value < ~24 MHz hits the same PLL floor; DCDC already at 0.95 V.
-  // No restore needed: SCB_AIRCR reset below restores the boot clock.
+  // 2. Drop CPU to ARM PLL minimum (~16.2 MHz, 0.95 V DCDC).
   set_arm_clock(16000000);
 
-  // Halt CPU between SysTick interrupts (1 ms) until KLR returns high
-  while (!digitalRead(KLR_PIN)) {
-    asm volatile("wfi");
+  // Switch AHB to 24 MHz crystal, then bypass ARM PLL so the CPU also takes the
+  // crystal reference (24 MHz / ARM_PODF ≈ 3 MHz), then power down the PLL VCO.
+  // Mirrors the temporary switch inside set_arm_clock() — proven safe sequence.
+  // AIRCR reset on wake restores all clock registers to boot state.
+  CCM_CBCMR = (CCM_CBCMR & ~CCM_CBCMR_PERIPH_CLK2_SEL_MASK)
+            | CCM_CBCMR_PERIPH_CLK2_SEL(1);           // PERIPH_CLK2 = 24 MHz OSC
+  while (CCM_CDHIPR & CCM_CDHIPR_PERIPH2_CLK_SEL_BUSY);
+  CCM_CBCDR &= ~CCM_CBCDR_PERIPH_CLK2_PODF_MASK;      // ÷1 (no divide on crystal)
+  CCM_CBCDR |=  CCM_CBCDR_PERIPH_CLK_SEL;             // AHB from crystal
+  while (CCM_CDHIPR & CCM_CDHIPR_PERIPH_CLK_SEL_BUSY);
+  CCM_ANALOG_PLL_ARM |= CCM_ANALOG_PLL_ARM_BYPASS;    // CPU: crystal ref / ARM_PODF
+  CCM_ANALOG_PLL_ARM |= CCM_ANALOG_PLL_ARM_POWERDOWN; // ARM PLL VCO off
+
+  // 3. GPIO interrupt on KLR rising edge; disable SysTick 1 ms tick.
+  //    Single WFI then sleeps until the actual wake event instead of every 1 ms.
+  //    If KLR is already high when WFI executes, the pending interrupt returns it
+  //    immediately — no race condition.
+  attachInterrupt(digitalPinToInterrupt(KLR_PIN), [](){}, RISING);
+  SYST_CSR &= ~1u;  // disable SysTick (bit 0 = ENABLE) — stops 1 ms wakeups
+
+  asm volatile("dsb");
+  asm volatile("isb");
+  if (!digitalRead(KLR_PIN)) {
+    asm volatile("wfi");  // sleep until KLR rising edge
   }
 
-  asm volatile("dsb"); // flush pending memory writes before reset
+  asm volatile("dsb");
 
 #ifdef UBLOX_GNSS
-  // Rising edge on EXTINT0 wakes the GNSS module; it will hot-start and begin
-  // navigating while the Teensy is resetting and running setup().
+  // Rising edge on EXTINT0 wakes the GNSS module for a hot-start while the Teensy resets.
+  // Use DWT cycle counter — independent of SysTick and the stale F_CPU_ACTUAL.
+  // At ~3 MHz (crystal / ARM_PODF=8), 150 000 cycles ≈ 50 ms.
   digitalWrite(GNSS_EXTINT_PIN, HIGH);
-  delay(50);
+  {
+    uint32_t t = ARM_DWT_CYCCNT;
+    while (ARM_DWT_CYCCNT - t < 150000u);
+  }
 #endif
 
   SCB_AIRCR = 0x05FA0004;
