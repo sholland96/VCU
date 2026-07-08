@@ -1251,7 +1251,7 @@ void enterSleep() {
   delay(500);
 #endif
 
-  // Assert CAN transceiver standby (no effect until hardware STBY mod is done).
+  // Assert CAN transceiver standby — puts all three transceivers into low-power mode.
   digitalWrite(CAN_STBY_PIN, HIGH);
 
   // Gate FlexCAN peripheral clocks — stops internal CAN controller sampling.
@@ -1399,7 +1399,7 @@ void setup() {
   pinMode(KLR_PIN, INPUT_PULLDOWN); // KLR key position 1 — LOW = key off → sleep
 
   pinMode(CAN_STBY_PIN, OUTPUT);
-  digitalWrite(CAN_STBY_PIN, LOW);    // transceivers active; HIGH in enterSleep() after hw mod
+  digitalWrite(CAN_STBY_PIN, LOW);    // transceivers active; driven HIGH in enterSleep()
 
   pinMode(PRECHARGE_EN_PIN, OUTPUT);
   digitalWrite(PRECHARGE_EN_PIN, LOW); // pre-charge disabled until PreCharge state

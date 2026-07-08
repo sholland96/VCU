@@ -79,8 +79,7 @@ typedef enum {
 #define GNSS_EXTINT_PIN   33  // free GPIO — wire to NEO-M8M EXTINT header on SK Pang board
 
 // CAN transceiver standby — drive HIGH to put all three transceivers into standby during sleep.
-// Requires hardware mod: lift STBY pins from GND on SK Pang board and wire to this pin.
-// Until mod is done, pin is driven LOW (no effect) and CCM clock gating provides the saving.
+// STBY pins lifted from GND on SK Pang board and wired to this pin.
 #define CAN_STBY_PIN      32
 
 // TPS131PXQ1EVM-400 active pre-charge enable (TIDA-050082).

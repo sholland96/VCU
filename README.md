@@ -248,7 +248,7 @@ Key constants (`defines.h`):
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
-| 32 | CAN transceiver standby (`CAN_STBY_PIN`) — driven HIGH during sleep to put all three transceivers into standby; requires hardware mod (lift STBY pins from GND on SK Pang board). No effect until mod is done. |
+| 32 | CAN transceiver standby (`CAN_STBY_PIN`) — driven HIGH during sleep to put all three transceivers into standby. STBY pins lifted from GND on SK Pang board and wired to this pin. |
 | 33 | GNSS EXTINT (`GNSS_EXTINT_PIN`) — wire to SK Pang GNSS EXTINT header; pulsed HIGH before reset to wake module from backup |
 | 34 | TPS131PXQ1EVM-400 active pre-charge enable (`PRECHARGE_EN_PIN`) — driven HIGH during PreCharge state |
 | 35 (D35) | GNSS 1PPS (`GPS_PPS_PIN`) — blue LED indicator on SK Pang board |
@@ -270,13 +270,14 @@ Turning the key off (KLR low) while in the Off state triggers `enterSleep()`:
 
 1. All four timers stop; heartbeat LED is forced off.
 2. GNSS is put into backup mode via `UBX-RXM-PMREQ` (`powerOffWithInterrupt`, EXTINT0 wake source, ~15 µA).
-3. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling. The transceivers remain powered (STBY pins held low by the SK Pang board), but their digital logic goes idle.
-4. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum via maximum dividers; DCDC core voltage drops to 0.95 V). No restore is needed — `SCB_AIRCR` reset on wake returns the clock to 600 MHz.
-5. CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high.
+3. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling.
+4. `CAN_STBY_PIN` (pin 32) is driven HIGH — all three CAN transceivers enter standby mode (STBY pins lifted from GND on SK Pang board and wired to pin 32).
+5. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum via maximum dividers; DCDC core voltage drops to 0.95 V). No restore is needed — `SCB_AIRCR` reset on wake returns the clock to 600 MHz.
+6. CPU halts in a `asm volatile("wfi")` polling loop (ARM Wait For Interrupt — clock-gated between SysTick ticks) until KLR returns high.
 
 On wake, a rising edge is asserted on pin 33 (EXTINT0) to start the GNSS hot-start before the Teensy resets; a `dsb` barrier flushes pending writes, then `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals cleanly. The GNSS module completes its hot-start during Teensy `setup()` and is ready by the time `myGNSS.begin()` is called.
 
-**Measured sleep current: ~23 mA at 12 V** (external 90–95 % efficient 12 V → 5 V switcher + Teensy onboard 3.3 V LDO).
+**Measured sleep current: ~15 mA at 12 V** (external 90–95 % efficient 12 V → 5 V switcher + Teensy onboard 3.3 V LDO). Down from ~61 mA before sleep optimisations.
 
 ### On State (KL15 active)
 
