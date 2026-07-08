@@ -1287,6 +1287,13 @@ void enterSleep() {
   attachInterrupt(digitalPinToInterrupt(KLR_PIN), [](){}, RISING);
   SYST_CSR &= ~1u;  // disable SysTick (bit 0 = ENABLE) — stops 1 ms wakeups
 
+  // STOP mode — gates more internal domains than WAIT mode.
+  // Wakeup source: KLR_PIN rising-edge GPIO interrupt (attached above).
+  // AIRCR reset on wake restores all registers, so no clock restore needed.
+  // To revert to WAIT mode: delete the two lines below.
+  CCM_CLPCR = (CCM_CLPCR & ~0x3u) | 0x2u;  // LPM = 0b10 (STOP)
+  SCB_SCR   |= (1u << 2);                    // SLEEPDEEP — WFI enters STOP not WAIT
+
   asm volatile("dsb");
   asm volatile("isb");
   if (!digitalRead(KLR_PIN)) {
