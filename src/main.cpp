@@ -1387,8 +1387,9 @@ void linWriteValve(uint8_t position) {
  */
 void readThrottle() {
   // ── 1. READ ─────────────────────────────────────────────────────────────
-  throttlePot1Raw = analogRead(THROTTLE_POT1_PIN);
-  throttlePot2Raw = analogRead(THROTTLE_POT2_PIN);
+  // throttlePot1Raw, throttlePot2Raw, and brakePedal updated by ADS1115 in loop()
+  regenActive = (LDUrpm > 50) && (LDUtorque < -5); // negative torque = generating
+  brakePedal |= regenActive; // regen counts as braking: zeroes throttle + sets CANIO BRAKE
 
   // ── 2. VERIFY — 5 % plausibility window between tracks ──────────────────
   uint16_t pct1 = constrain(map(throttlePot1Raw, THROTTLE_POT1_MIN, THROTTLE_POT1_MAX, 0, 100), 0, 100);
@@ -1397,7 +1398,6 @@ void readThrottle() {
   uint16_t pedalPct = throttlePlausibility ? pct1 : 0; // track 1 primary; fault → 0
 
   // ── 3. ARBITRATE ─────────────────────────────────────────────────────────
-  brakePedal = (analogRead(BRAKE_PIN) > BRAKE_THRESHOLD);
   bool faultActive = IVTfaultActive || (SIMM100MODerrorFlags != 0);
 
   if (!throttlePlausibility || brakePedal) {
@@ -1497,6 +1497,16 @@ void setup() {
   Serial.printf("setNavFreq:    %s\n", myGNSS.setNavigationFrequency(10) ? "OK" : "FAIL");
   Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
 #endif
+
+  // ADS1115 — I2C0 shares Wire with GNSS (already started above).
+  if (!ads.begin(ADS1115_ADDR)) {
+    Serial.println("ADS1115 not found");
+  } else {
+    Serial.println("ADS1115 online");
+    ads.setGain(GAIN_ONE);                // ±4.096 V — covers 3.3V sensors
+    ads.setDataRate(RATE_ADS1115_860SPS); // 860 SPS → ~1.2ms/conversion, ~3.5ms/channel cycle
+    ads.startADCReading(ADS1X15_REG_CONFIG_MUX_SINGLE_0, false); // start first read
+  }
 
   delay(100);
   wakepMBB32();
@@ -1739,6 +1749,30 @@ void loop() {
   // KLR gone low (key off) while system is safe → hibernate
   if (!digitalRead(KLR_PIN) && VCUstate == VCU_STATE_OFF) {
     enterSleep();
+  }
+
+  // ADS1115 non-blocking read — cycles through throttle pot 1/2 and brake at 860 SPS (~3.5ms/cycle).
+  // Time-gated: only checks I2C once per conversion period to avoid starving the GNSS on Wire.
+  {
+    static const uint16_t adsMux[3] = {
+      ADS1X15_REG_CONFIG_MUX_SINGLE_0,
+      ADS1X15_REG_CONFIG_MUX_SINGLE_1,
+      ADS1X15_REG_CONFIG_MUX_SINGLE_2,
+    };
+    static uint8_t  adsCh   = 0;
+    static uint32_t adsNext = 0;   // micros() deadline for next read
+    if ((int32_t)(micros() - adsNext) >= 0) {
+      int16_t val = ads.getLastConversionResults();
+      if (val < 0) val = 0;
+      switch (adsCh) {
+        case 0: throttlePot1Raw = (uint16_t)val; break;
+        case 1: throttlePot2Raw = (uint16_t)val; break;
+        case 2: brakeRaw = val; brakePedal = (val > BRAKE_THRESHOLD); break;
+      }
+      adsCh = (adsCh + 1) % 3;
+      ads.startADCReading(adsMux[adsCh], false);
+      adsNext = micros() + 1300; // 1.16ms conversion + 150µs I2C margin
+    }
   }
 
 #ifdef UBLOX_GNSS

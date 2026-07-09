@@ -67,8 +67,16 @@ typedef enum {
 #define UBLOX_GNSS
 //#define PMBBB32_DEBUG  // print all 0x18FF__ CAN1 frames + stale counters to Serial
 
+// ADS1115 16-bit 4-channel ADC — I2C0 (Wire, SDA=18, SCL=19), ADDR pin → GND = 0x48.
+// Channels: AIN0=throttle pot 1, AIN1=throttle pot 2, AIN2=brake pedal, AIN3=spare.
+// Gain: GAIN_ONE (±4.096 V) — suitable for 3.3V-referenced sensors.
+// If sensors are 5V-referenced change to GAIN_TWOTHIRDS (±6.144 V) and re-calibrate.
+#include <Adafruit_ADS1X15.h>
+Adafruit_ADS1115 ads;
+#define ADS1115_ADDR  0x48
+
 #ifdef UBLOX_GNSS
-#include <i2c_driver_wire.h>
+#include <Wire.h>
 #include <SparkFun_u-blox_GNSS_Arduino_Library.h>
 
 // SK Pang board: NEO-M8M GNSS on I2C0 — Wire (SDA=pin 18, SCL=pin 19)
@@ -85,6 +93,15 @@ typedef enum {
 // TPS131PXQ1EVM-400 active pre-charge enable (TIDA-050082).
 // Drive HIGH to enable; LOW to disable. Monitored by check_PreCharge() via IVT U2.
 #define PRECHARGE_EN_PIN  34
+
+// Waveshare SIM7080G Cat-M/NB-IoT HAT — cellular modem (LTE-M, T-Mobile)
+// UART: Serial4 (TX=17, RX=16) at 115200 baud, 3.3V logic (HAT default).
+// PWRKEY: pulse LOW for ~1 s on startup to power on the module.
+// SMS via AT+CMGS; data via AT+CNACT / AT+SHCONN (HTTPS).
+// Do not connect HAT GNSS antenna — u-blox NEO-M8M already fitted.
+#define SIM7080_SERIAL    Serial4
+#define SIM7080_BAUD      115200
+#define SIM7080_PWRKEY    36    // pulse LOW ~1 s to power on module
 
 SFE_UBLOX_GNSS myGNSS;
 #endif
@@ -252,23 +269,26 @@ uint16_t rpm = 0;
 uint16_t power = 0;
 uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
 
-// EVWest dual pot throttle (OEM pedal)
-#define THROTTLE_POT1_PIN       A14
-#define THROTTLE_POT2_PIN       A15
-// Calibration endpoints in 12-bit ADC counts (0–4095) -- TODO: bench calibrate
-#define THROTTLE_POT1_MIN       100
-#define THROTTLE_POT1_MAX       3900
-#define THROTTLE_POT2_MIN       100
-#define THROTTLE_POT2_MAX       3900
+// EVWest dual pot throttle (OEM pedal) — read via ADS1115 on I2C0
+#define ADS_CH_THROTTLE1        0   // ADS1115 AIN0 — throttle pot 1
+#define ADS_CH_THROTTLE2        1   // ADS1115 AIN1 — throttle pot 2
+#define ADS_CH_BRAKE            2   // ADS1115 AIN2 — brake pedal
+// Calibration endpoints in ADS1115 counts (GAIN_ONE ±4.096 V, int16_t 0–32767 for 0–4.096 V)
+// Values below are ×8 approximations of the old 12-bit values — TODO: bench calibrate
+#define THROTTLE_POT1_MIN       800
+#define THROTTLE_POT1_MAX       31200
+#define THROTTLE_POT2_MIN       800
+#define THROTTLE_POT2_MAX       31200
 #define THROTTLE_PLAUSIBILITY_PCT 5   // max allowable % difference between tracks
 #define THROTTLE_FAULT_LIMIT    20    // max throttle % permitted when IVT or SIM fault active
-#define BRAKE_PIN               A17
-#define BRAKE_THRESHOLD         200   // ADC counts (0–4095) — TODO: bench calibrate
+#define BRAKE_THRESHOLD         1600  // ADS1115 counts — TODO: bench calibrate
 #define PRECHARGE_TIMEOUT_MS    2000  // pre-charge relay must raise U2 to ≥95% of U1 within this window
-uint16_t throttlePot1Raw;             // raw 12-bit ADC count, track 1
-uint16_t throttlePot2Raw;             // raw 12-bit ADC count, track 2
+uint16_t throttlePot1Raw;             // ADS1115 AIN0 count, track 1 (updated in loop())
+uint16_t throttlePot2Raw;             // ADS1115 AIN1 count, track 2 (updated in loop())
+int16_t  brakeRaw = 0;                // ADS1115 AIN2 count (updated in loop())
 bool     throttlePlausibility = true; // false = tracks disagree → throttle forced to 0
 bool     brakePedal           = false;// true when brake pedal is pressed
+bool     regenActive          = false;// true when LDU torque is negative and motor is spinning
 bool     IVTfaultActive       = false;// set in can2Sniff on overcurrent / overvoltage
 uint32_t preChargeStartTime   = 0;   // millis() when PreCharge state was entered
 bool     chargeMode           = false;// true when pre-charge was triggered by EVCC, not KL15
