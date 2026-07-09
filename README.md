@@ -15,6 +15,7 @@ Built with PlatformIO / Arduino framework.
 | LIN | Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) — GNSS UART is on Serial2, no conflict |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
 | ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN_ONE ±4.096 V, 860 SPS) |
+| DCFC | Advantics ADM-CS-EVCC CCS/AC charge controller (CAN2 @ 500 kbps, Generic PEV protocol v2.x) |
 | Throttle | EVWest dual-pot (OEM pedal) — ADS1115 AIN0 (track 1) / AIN1 (track 2) |
 | Brake | Brake pressure sensor — ADS1115 AIN2 |
 
