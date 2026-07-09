@@ -14,8 +14,9 @@ Built with PlatformIO / Arduino framework.
 | CAN | FlexCAN_T4 — two classic CAN + one CAN FD |
 | LIN | Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) — GNSS UART is on Serial2, no conflict |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
-| Throttle | EVWest dual-pot (OEM pedal) on A14 / A15 |
-| Brake | Brake pressure sensor on A17 |
+| ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN_ONE ±4.096 V, 860 SPS) |
+| Throttle | EVWest dual-pot (OEM pedal) — ADS1115 AIN0 (track 1) / AIN1 (track 2) |
+| Brake | Brake pressure sensor — ADS1115 AIN2 |
 
 ---
 
@@ -107,7 +108,7 @@ After startup, `0xFF0000` is sent every 200 ms to keep measurements running.
 
 ### CAN2 — 500 kbps
 
-Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU (v5 board), EMP WP29-12V-CV-A water pump
+Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU (v5 board), EMP WP29-12V-CV-A water pump, Advantics ADM-CS-EVCC DC fast charge controller
 
 **Transmitted (VCU → device)**
 
@@ -118,6 +119,9 @@ Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU (v5 board), EMP 
 | `0x18EF{pump}{vcu}` | Extended | 200 ms | EMP WP29 pump Motor Command (byte 0: 0xFD=on/0xFC=off; byte 3: %×2) |
 | `0x18EF2100` | Extended | on demand | CAN keypad LED colour / mode command |
 | `0x201` | Standard | **10 ms** | OpenInverter LDU fixed safety frame (see below) |
+| `0x610` | Standard | 62.5 ms | EVCC EV_Information — State_of_Charge (%), Energy_Capacity (kWh × 0.1) |
+| `0x612` | Standard | 62.5 ms | EVCC DC_Status1 — Max_Charge_Current, Present_Current, Max_Discharge_Current, Target_Voltage |
+| `0x613` | Standard | 62.5 ms | EVCC DC_Status2 — Contactors_Closed, Normal_End_of_Charge, Emergency_Stop, Battery_Voltage (IVT U1), Inlet_Voltage (IVT U3) |
 
 **OpenInverter LDU 0x201 frame — v5.32+ fixed bit-packed layout**
 
@@ -163,9 +167,9 @@ save
 | ID | Rate | Description |
 |----|------|-------------|
 | `0x621` | 20 ms | IVT-MOD current |
-| `0x622` | 60 ms | IVT-MOD pack voltage U1 |
-| `0x623` | 60 ms | IVT-MOD pre-charge voltage U2 |
-| `0x624` | 60 ms | IVT-MOD voltage U3 |
+| `0x622` | 60 ms | IVT-MOD pack voltage U1 (Pack+) |
+| `0x623` | 60 ms | IVT-MOD pre-charge voltage U2 (DC-Link+) |
+| `0x624` | 60 ms | IVT-MOD DCFC inlet voltage U3 (DCFC+) |
 | `0x625` | 200 ms | IVT-MOD temperature |
 | `0x626` | 30 ms | IVT-MOD power |
 | `0x627` | 30 ms | IVT-MOD coulomb counter |
@@ -176,6 +180,10 @@ save
 | `0x55A` | — | OpenInverter LDU faults *(TODO: confirm ID)* |
 | `0x18FF03{pump}` | 1 Hz | EMP WP29 Motor Status Message 1 (speed, temp, power, controller status) |
 | `0x18FF24{pump}` | 100 ms | EMP WP29 Motor Status Message 3 (voltage, current, HVIL status) |
+| `0x600` | ~100 ms | EVCC Communication_Stage, Protocol, Pins, Max_Current |
+| `0x602` | ~100 ms | EVCC Close_Contactors signal (EVCC drives its own hardware; VCU monitors only) |
+| `0x604` | ~1 s | EVCC DC contactor positive/negative feedback, temperatures |
+| `0x605` | on event | EVCC diagnostic fault flags |
 
 ---
 
@@ -217,7 +225,7 @@ Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
 
 | Stage | Action |
 |-------|--------|
-| **1 Read** | `analogRead(A14)` (pin 38) and `analogRead(A15)` (pin 39) |
+| **1 Read** | ADS1115 AIN0 (track 1) and AIN1 (track 2) — polled non-blocking in `loop()` at 860 SPS, time-gated at 1300 µs per channel to share I2C0 with GNSS |
 | **2 Verify** | Cross-check tracks within 5 %; mismatch → throttle = 0 |
 | **3 Arbitrate** | Brake pedal pressed → 0; IVT or SIM fault active → clamp to 20 % |
 | **4 Map** | Linear 1:1 pedal % → `LDUtorqueSetpoint` (0–100); zero outside Drive state |
@@ -229,8 +237,9 @@ Key constants (`defines.h`):
 |----------|-------|---------|
 | `THROTTLE_PLAUSIBILITY_PCT` | 5 | Max allowed % gap between track 1 and track 2 |
 | `THROTTLE_FAULT_LIMIT` | 20 | Max throttle % when IVT or SIM fault active |
-| `THROTTLE_POT1/2_MIN` | 100 | ADC count at idle — **bench calibrate** |
-| `THROTTLE_POT1/2_MAX` | 3900 | ADC count at full pedal — **bench calibrate** |
+| `THROTTLE_POT1/2_MIN` | 800 | ADS1115 counts at idle — **bench calibrate** |
+| `THROTTLE_POT1/2_MAX` | 31200 | ADS1115 counts at full pedal — **bench calibrate** |
+| `BRAKE_THRESHOLD` | 1600 | ADS1115 counts at which brake pedal is considered pressed — **bench calibrate** |
 
 ---
 
@@ -255,9 +264,7 @@ Key constants (`defines.h`):
 | 33 | GNSS EXTINT (`GNSS_EXTINT_PIN`) — wire to SK Pang GNSS EXTINT header; pulsed HIGH before reset to wake module from backup |
 | 34 | TPS131PXQ1EVM-400 active pre-charge enable (`PRECHARGE_EN_PIN`) — driven HIGH during PreCharge state |
 | 35 (D35) | GNSS 1PPS (`GPS_PPS_PIN`) — blue LED indicator on SK Pang board |
-| A14 (pin 38) | Throttle pot 1 (EVWest dual-pot) |
-| A15 (pin 39) | Throttle pot 2 (EVWest dual-pot) |
-| A17 (pin 41) | Brake pedal pressure sensor (`BRAKE_PIN`) |
+| 18 (SDA) / 19 (SCL) | ADS1115 AIN0: throttle track 1; AIN1: throttle track 2; AIN2: brake pressure (I2C0, shared with GNSS) |
 
 ---
 
@@ -356,7 +363,7 @@ Key Contact state message format (PKP2400SI J1939 §6, event-driven by default):
 | Timer | Hardware | Period | Work |
 |-------|----------|--------|------|
 | **t0** | PIT (IntervalTimer) | **10 ms** | Throttle pipeline (read/verify/arbitrate/map); assemble and send LDU 0x201 safety frame |
-| t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update |
+| t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update; EVCC battery status (0x610/0x612/0x613) |
 | t2 | GPT1 | 200 ms | Send `0xFF0000` measurement trigger; invalidate stale module data; stale module recovery (wake + contReportingEnable); SIM100MOD isolation poll; LIN valve poll |
 | t3 | GPT2 | 1000 ms | Heartbeat LED toggle |
 | main loop | — | free-running | CAN event dispatch; GNSS processing; FSM step |
@@ -377,6 +384,7 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 | `sparkfun/SparkFun u-blox GNSS Arduino Library` | GNSS / GPS |
 | `jonblack/arduino-fsm` | Finite state machine |
 | `gicking/LIN master portable` | LIN master on Serial3 |
+| `adafruit/Adafruit ADS1X15` | ADS1115 16-bit ADC driver |
 
 ---
 
@@ -384,8 +392,9 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 
 - **OpenInverter LDU v5** — run `can tx` in inverter terminal to confirm actual RX CAN IDs for status/fault frames; wire up `can2Sniff()` cases for `LDUrpm`, `LDUtorque`, `LDUmotorTemp`, etc.
 - **OpenInverter CRC** — implement `crc_calculate_block` equivalent and set `controlcheck 1` on inverter once formula is confirmed from stm32-sine source
-- **Brake calibration** — bench-calibrate `BRAKE_THRESHOLD` (currently 200 / 4095 ADC counts) against actual sensor output
-- **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` constants
+- **Brake calibration** — bench-calibrate `BRAKE_THRESHOLD` (ADS1115 counts) against actual sensor output
+- **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` (ADS1115 counts; current values are ×8 approximations of old 12-bit readings)
+- **EVCC calibration** — set `EVCC_CELL_V_EMPTY` / `EVCC_CELL_V_FULL` (pMBB32 raw counts) for actual cell chemistry; set `EVCC_MAX_CHARGE_A` and `EVCC_TARGET_V` for pack limits; set `EVCC_PACK_ENERGY_X10` for actual pack capacity
 - **EMP WP29 pump** — confirm pump J1939 source address (`EMP_WP29_ADDR` in defines.h, currently `0x8A`) via CAN sniffer or DBC file; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
 - **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
 - **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-MOD U2 (pre-charge voltage)
