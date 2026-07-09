@@ -248,6 +248,7 @@ Key constants (`defines.h`):
 
 | Pin | Function |
 |-----|----------|
+| 0 | CAN2 RXD wake input (`CAN2_RX_PIN`) — MCP2562 drives this low on bus activity; falling-edge interrupt wakes VCU from STOP mode for EVCC charge sessions |
 | 2 | KLR input (`KLR_PIN`) — key position 1, wakes hardware |
 | 3 | Loop timing debug output |
 | 4 | CAN1 RX timing debug output |
@@ -277,7 +278,7 @@ The VCU uses two top-level regions separated by the physical key switch:
 
 Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the KL15 start button (keypad button 5).
 
-Turning the key off (KLR low) while in the Off state triggers `enterSleep()`:
+Turning the key off (KLR low) while in the Off state triggers `enterSleep()` after a 500 ms debounce (KLR must be continuously low for 500 ms). The debounce gives the EVCC five broadcast periods to announce itself after a CAN2 wake before sleep is re-entered. `enterSleep()` returns immediately if `EVCCstage > 0` (active DCFC session), keeping the VCU awake without KLR.
 
 1. All four timers stop; heartbeat LED is forced off.
 2. USB PHY is powered down (`USBPHY1_PWD = 0xFFFFFFFF`) and its CCM clock gated.
@@ -285,7 +286,7 @@ Turning the key off (KLR low) while in the Off state triggers `enterSleep()`:
 4. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling.
 5. `CAN_STBY_PIN` (pin 32) is driven HIGH — all three CAN transceivers enter standby mode.
 6. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum; DCDC core voltage drops to 0.95 V), then AHB is switched to the 24 MHz crystal, ARM PLL bypass is enabled (CPU runs at crystal / ARM_PODF ≈ 3 MHz), and the ARM PLL VCO is powered down.
-7. A rising-edge GPIO interrupt is attached to `KLR_PIN`; SysTick is disabled.
+7. CAN2 RXD pin (pin 0) is reconfigured as GPIO input with pull-up. Rising-edge interrupt on `KLR_PIN` and falling-edge interrupt on `CAN2_RX_PIN` are attached as dual wake sources; SysTick is disabled. The MCP2562 transceiver drives RXD low on dominant bus edges even in standby, so EVCC CAN traffic wakes the VCU without KLR.
 8. `CCM_CLPCR[LPM]` is set to STOP (0b10) and `SCB_SCR[SLEEPDEEP]` is set — a single `wfi` then enters IMXRT1062 STOP mode, gating internal power domains beyond what WAIT mode achieves.
 
 On wake, a rising edge is asserted on pin 33 (EXTINT0) via DWT cycle-counter delay to start the GNSS hot-start before the Teensy resets; `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals (including clock restoration) cleanly.
