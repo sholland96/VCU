@@ -138,6 +138,56 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
   //delay(1);
   if (VCUstate != VCU_STATE_FAULT)//(VCUstate != VCU_STATE_OFF && VCUstate != VCU_STATE_FAULT)
     displayStatus(); // update RealDash
+
+  // Advantics ADM-CS-EVCC: send battery status every 62.5ms (within 100ms requirement)
+  {
+    // SoC from highest cell voltage — linear approximation, TODO: calibrate endpoints
+    uint8_t soc = 0;
+    if (highestCellV >= EVCC_CELL_V_EMPTY)
+      soc = (uint8_t)constrain(map((long)highestCellV,
+              (long)EVCC_CELL_V_EMPTY, (long)EVCC_CELL_V_FULL, 0L, 100L), 0L, 100L);
+    normalEndOfCharge = (highestCellV > 0u) && (highestCellV >= EVCC_CELL_V_FULL);
+
+    msg2.flags.extended = 0;
+
+    // 0x610: EV_Information — SoC (%) and energy capacity (kWh × 0.1)
+    msg2.id     = EVCC_EV_INFO;
+    msg2.len    = 3;
+    msg2.buf[0] = soc;
+    msg2.buf[1] = (uint8_t)( EVCC_PACK_ENERGY_X10        & 0xFF);
+    msg2.buf[2] = (uint8_t)((EVCC_PACK_ENERGY_X10 >> 8)  & 0xFF);
+    can2.write(msg2);
+
+    // 0x612: DC_Status1 — current and voltage limits/measurements
+    int16_t maxChgA  = normalEndOfCharge ? 0 : (int16_t)EVCC_MAX_CHARGE_A;
+    int16_t presentA = (int16_t)((int32_t)IVTpackCurrent / 1000);  // mA → A
+    msg2.id     = EVCC_DC_STATUS1;
+    msg2.len    = 8;
+    msg2.buf[0] = (uint8_t)( maxChgA        & 0xFF);
+    msg2.buf[1] = (uint8_t)((maxChgA  >> 8) & 0xFF);
+    msg2.buf[2] = (uint8_t)( presentA       & 0xFF);
+    msg2.buf[3] = (uint8_t)((presentA >> 8) & 0xFF);
+    msg2.buf[4] = 0;  // Max_Discharge_Current = 0 (not bidirectional)
+    msg2.buf[5] = 0;
+    msg2.buf[6] = (uint8_t)( EVCC_TARGET_V       & 0xFF);
+    msg2.buf[7] = (uint8_t)((EVCC_TARGET_V >> 8) & 0xFF);
+    can2.write(msg2);
+
+    // 0x613: DC_Status2 — status flags + Battery_Voltage + Inlet_Voltage (both in 0.1 V)
+    // IVT-MOD: U1=Pack+, U2=DC-Link+, U3=DCFC+ → IVTvoltage3 is the DCFC inlet voltage
+    uint16_t batV_x10   = (uint16_t)(IVTpackVoltage / 100u);  // mV → 0.1 V
+    uint16_t inletV_x10 = (uint16_t)(IVTvoltage3    / 100u);  // mV → 0.1 V
+    msg2.id     = EVCC_DC_STATUS2;
+    msg2.len    = 5;
+    msg2.buf[0] = (EVCCcontactorsClosed ? 0x01u : 0x00u)
+                | (normalEndOfCharge    ? 0x02u : 0x00u)
+                | (emergencyStop        ? 0x04u : 0x00u);
+    msg2.buf[1] = (uint8_t)( batV_x10        & 0xFF);
+    msg2.buf[2] = (uint8_t)((batV_x10  >> 8) & 0xFF);
+    msg2.buf[3] = (uint8_t)( inletV_x10      & 0xFF);
+    msg2.buf[4] = (uint8_t)((inletV_x10 >> 8) & 0xFF);
+    can2.write(msg2);
+  }
 }//end of callback_cells_pdu()
 
 /* t2 Callback
@@ -608,6 +658,27 @@ void can2Sniff(const CAN_message_t &msg) {
       // bytes 0-1: motor voltage (little-endian, 0.05 V/bit)
       // bytes 2-3: motor current (little-endian, 0.05 A/bit, offset -1600)
       // byte 4 bit 0: HVIL status (0=OK, 1=open)
+      break;
+
+    /* Advantics ADM-CS-EVCC DC Fast Charge Controller -------------------
+     * EVCC drives DCFC contactors via its own hardware; VCU monitors state.
+     * DCFC inlet wired directly to battery pack, independent of PDU-8.
+     * Byte layouts per Advantics Generic PEV protocol v2.x (little-endian).
+     */
+    case EVCC_EVSE_INFO:
+      EVCCstage = msg.buf[0];
+      // buf[1]=Protocol, buf[2]=Pins, buf[3:4]=Max_Current (s16, A) — not consumed yet
+      break;
+    case EVCC_DC_CONTROL:
+      // buf[0] bit 0 = Close_Contactors; EVCC drives hardware directly, VCU monitors only
+      break;
+    case EVCC_HW_STATUS:
+      // bit 0 = DC_Contactor_Positive_Feedback, bit 1 = DC_Contactor_Negative_Feedback
+      EVCCcontactorsClosed = (msg.buf[0] & 0x03) == 0x03;
+      break;
+    case EVCC_DIAG_STATUS:
+      // 26 diagnostic flags packed into bytes 0–3 (bit 25 = msb of byte 3 bit 1)
+      EVCCfaultActive = msg.buf[0] || msg.buf[1] || msg.buf[2] || (msg.buf[3] & 0x03);
       break;
 
   }

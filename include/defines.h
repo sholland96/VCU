@@ -264,6 +264,37 @@ uint16_t pumpActualSpeed;  // raw measured speed (0.5 rpm/bit — divide by 2 fo
 uint8_t  pumpStatus;       // controller status nibble (byte 0 bits[5:2] of Status Msg 2)
 uint8_t  pumpFaults;       // service indicator [1:0] + operation status [3:2] (byte 7)
 uint8_t  pumpSetpoint;     // commanded speed 0–100 %
+
+// Advantics ADM-CS-EVCC DC Fast Charge Controller (CAN2 @ 500kbps)
+// Generic PEV protocol v2.x, 11-bit standard IDs.
+// EVCC drives DCFC contactors directly via its own hardware outputs.
+// DCFC inlet connects directly to battery pack — independent of main pack contactors (PDU-8).
+//
+// Received from EVCC (EVCC → VCU, ~100ms)
+#define EVCC_EVSE_INFO   0x600u  // Communication_Stage(8b), Protocol(8b), Pins(8b), Max_Current(16b s A), RCD_Status(1b)
+#define EVCC_DC_CONTROL  0x602u  // Close_Contactors(1b) — EVCC drives its own hardware; VCU monitors only
+#define EVCC_HW_STATUS   0x604u  // DC_Contactor_Pos/Neg_Feedback(1b each), Stop_Charge(1b), temperatures (1000ms)
+#define EVCC_DIAG_STATUS 0x605u  // 26 diagnostic fault flags
+//
+// Sent by VCU (VCU → EVCC, 100ms)
+#define EVCC_EV_INFO     0x610u  // State_of_Charge(8b %), Energy_Capacity(16b kWh×0.1)
+#define EVCC_DC_STATUS1  0x612u  // Max_Charge_Current(16b s A), Present_Current(16b s A), Max_Discharge_Current(16b A), Target_Voltage(16b V)
+#define EVCC_DC_STATUS2  0x613u  // Contactors_Closed(1b), Normal_End_of_Charge(1b), Emergency_Stop(1b), Battery_Voltage(16b V×0.1), Inlet_Voltage(16b V×0.1)
+//
+// Pack parameters — TODO: calibrate for actual cell chemistry and pack configuration
+#define EVCC_PACK_ENERGY_X10  400   // energy capacity × 10 in kWh (e.g. 400 = 40.0 kWh)
+#define EVCC_MAX_CHARGE_A     100   // BMS maximum charge current limit (A)
+#define EVCC_TARGET_V         400   // full-charge target pack voltage (V)
+// pMBB32 cell voltage thresholds (16-bit ADC, 5 V ref → 1 count ≈ 76.3 µV)
+#define EVCC_CELL_V_EMPTY  39322u   // ≈ 3.0 V — 0 % SoC reference   (TODO: calibrate for cell chemistry)
+#define EVCC_CELL_V_FULL   47841u   // ≈ 3.65 V — 100 % / end-of-charge (TODO: calibrate)
+//
+uint8_t  EVCCstage            = 0;     // Communication_Stage byte from 0x600
+bool     EVCCcontactorsClosed = false; // true when both DC contactor feedbacks closed (0x604)
+bool     EVCCfaultActive      = false; // true when any diagnostic flag is set (0x605)
+bool     normalEndOfCharge    = false; // set when highestCellV ≥ EVCC_CELL_V_FULL
+bool     emergencyStop        = false; // set on critical BMS fault during DCFC
+
 uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
 uint16_t rpm = 0;
 uint16_t power = 0;
