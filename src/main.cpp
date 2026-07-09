@@ -1307,9 +1307,6 @@ void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 extern "C" uint32_t set_arm_clock(uint32_t frequency); // clockspeed.c
 
 void enterSleep() {
-  // Don't sleep during an active EVCC charge session — EVCC will have woken us via CAN2.
-  if (EVCCstage > 0) return;
-
   Serial.println("KLR off — sleeping");
   Serial.flush();
 
@@ -1338,11 +1335,6 @@ void enterSleep() {
                  CCM_CCGR0_CAN2(3) | CCM_CCGR0_CAN2_SERIAL(3));
   CCM_CCGR7 &= ~(CCM_CCGR7_CAN3(3) | CCM_CCGR7_CAN3_SERIAL(3));
 
-  // Reconfigure CAN2 RXD pin as GPIO input now that the CAN controller is gated.
-  // MCP2562 (SK Pang board) in standby drives RXD low on any dominant bus edge —
-  // sufficient to trigger the FALLING interrupt below without leaving standby.
-  pinMode(CAN2_RX_PIN, INPUT_PULLUP);
-
   // 2. Drop CPU to ARM PLL minimum (~16.2 MHz, 0.95 V DCDC).
   set_arm_clock(16000000);
 
@@ -1359,16 +1351,15 @@ void enterSleep() {
   CCM_ANALOG_PLL_ARM |= CCM_ANALOG_PLL_ARM_BYPASS;    // CPU: crystal ref / ARM_PODF
   CCM_ANALOG_PLL_ARM |= CCM_ANALOG_PLL_ARM_POWERDOWN; // ARM PLL VCO off
 
-  // 3. GPIO interrupts on both wake sources; disable SysTick 1 ms tick.
+  // 3. GPIO interrupt on KLR rising edge; disable SysTick 1 ms tick.
   //    Single WFI then sleeps until the actual wake event instead of every 1 ms.
   //    If KLR is already high when WFI executes, the pending interrupt returns it
   //    immediately — no race condition.
-  attachInterrupt(digitalPinToInterrupt(KLR_PIN),    [](){}, RISING);   // key-on wake
-  attachInterrupt(digitalPinToInterrupt(CAN2_RX_PIN), [](){}, FALLING); // EVCC bus-activity wake
+  attachInterrupt(digitalPinToInterrupt(KLR_PIN), [](){}, RISING);
   SYST_CSR &= ~1u;  // disable SysTick (bit 0 = ENABLE) — stops 1 ms wakeups
 
   // STOP mode — gates more internal domains than WAIT mode.
-  // Wake sources: KLR_PIN rising edge (key-on) or CAN2_RX_PIN falling edge (EVCC bus activity).
+  // Wakeup source: KLR_PIN rising-edge GPIO interrupt (attached above).
   // AIRCR reset on wake restores all registers, so no clock restore needed.
   // To revert to WAIT mode: delete the two lines below.
   CCM_CLPCR = (CCM_CLPCR & ~0x3u) | 0x2u;  // LPM = 0b10 (STOP)
@@ -1826,11 +1817,8 @@ void loop() {
 
     //timer.setTimer(30);// seconds
 
-  // KLR gone low (key off) while system is safe → hibernate.
-  // 300ms startup grace period allows EVCC to send its first 0x600 and set EVCCstage
-  // before the sleep check fires — prevents re-sleeping immediately after a CAN2 wake.
-  // enterSleep() itself returns early if EVCCstage > 0 (active charge session).
-  if (!digitalRead(KLR_PIN) && VCUstate == VCU_STATE_OFF && millis() > 300) {
+  // KLR gone low (key off) while system is safe → hibernate
+  if (!digitalRead(KLR_PIN) && VCUstate == VCU_STATE_OFF) {
     enterSleep();
   }
 

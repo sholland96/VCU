@@ -90,12 +90,6 @@ Adafruit_ADS1115 ads;
 // STBY pins lifted from GND on SK Pang board and wired to this pin.
 #define CAN_STBY_PIN      32
 
-// CAN2 RXD wake input — transceiver RXD line monitored during sleep for EVCC bus activity.
-// SK Pang board uses MCP2562: in standby (STBY=HIGH) RXD goes low on dominant bus edges,
-// enabling bus wake-up without requiring the transceiver to leave standby.
-// Teensy 4.1 FLEXCAN2_RX default = pin 0 — verify against SK Pang Triple CAN schematic.
-#define CAN2_RX_PIN       0   // CANRX2 / UART RX1 — confirmed SK Pang Triple CAN board
-
 // TPS131PXQ1EVM-400 active pre-charge enable (TIDA-050082).
 // Drive HIGH to enable; LOW to disable. Monitored by check_PreCharge() via IVT U2.
 #define PRECHARGE_EN_PIN  34
