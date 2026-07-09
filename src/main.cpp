@@ -1307,6 +1307,8 @@ void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 extern "C" uint32_t set_arm_clock(uint32_t frequency); // clockspeed.c
 
 void enterSleep() {
+  if (EVCCstage > 0) return;  // active EVCC session — stay awake
+
   Serial.println("KLR off — sleeping");
   Serial.flush();
 
@@ -1335,6 +1337,10 @@ void enterSleep() {
                  CCM_CCGR0_CAN2(3) | CCM_CCGR0_CAN2_SERIAL(3));
   CCM_CCGR7 &= ~(CCM_CCGR7_CAN3(3) | CCM_CCGR7_CAN3_SERIAL(3));
 
+  // Reconfigure CAN2 RXD pin as GPIO input (CAN clock already gated).
+  // MCP2562 in standby drives RXD low on dominant bus edges — triggers the interrupt below.
+  pinMode(CAN2_RX_PIN, INPUT_PULLUP);
+
   // 2. Drop CPU to ARM PLL minimum (~16.2 MHz, 0.95 V DCDC).
   set_arm_clock(16000000);
 
@@ -1355,11 +1361,12 @@ void enterSleep() {
   //    Single WFI then sleeps until the actual wake event instead of every 1 ms.
   //    If KLR is already high when WFI executes, the pending interrupt returns it
   //    immediately — no race condition.
-  attachInterrupt(digitalPinToInterrupt(KLR_PIN), [](){}, RISING);
+  attachInterrupt(digitalPinToInterrupt(KLR_PIN),    [](){}, RISING);   // key-on
+  attachInterrupt(digitalPinToInterrupt(CAN2_RX_PIN), [](){}, FALLING); // EVCC bus activity
   SYST_CSR &= ~1u;  // disable SysTick (bit 0 = ENABLE) — stops 1 ms wakeups
 
   // STOP mode — gates more internal domains than WAIT mode.
-  // Wakeup source: KLR_PIN rising-edge GPIO interrupt (attached above).
+  // Wake sources: KLR_PIN rising edge (key-on) or CAN2_RX_PIN falling edge (EVCC).
   // AIRCR reset on wake restores all registers, so no clock restore needed.
   // To revert to WAIT mode: delete the two lines below.
   CCM_CLPCR = (CCM_CLPCR & ~0x3u) | 0x2u;  // LPM = 0b10 (STOP)
@@ -1817,9 +1824,18 @@ void loop() {
 
     //timer.setTimer(30);// seconds
 
-  // KLR gone low (key off) while system is safe → hibernate
-  if (!digitalRead(KLR_PIN) && VCUstate == VCU_STATE_OFF) {
-    enterSleep();
+  // KLR gone low (key off) while system is safe → hibernate.
+  // Debounce: only sleep after KLR has been continuously LOW for 500ms.
+  // Gives the EVCC (100ms broadcast) 5 periods to set EVCCstage after a CAN2 wake
+  // before sleep is re-entered. Normal key-off behaviour is unchanged.
+  // enterSleep() returns immediately if EVCCstage > 0 (active charge session).
+  {
+    static uint32_t klrLowSince = 0;
+    if (digitalRead(KLR_PIN)) {
+      klrLowSince = millis();
+    } else if (VCUstate == VCU_STATE_OFF && millis() - klrLowSince > 500) {
+      enterSleep();
+    }
   }
 
   // ADS1115 non-blocking read — cycles through throttle pot 1/2 and brake at 860 SPS (~3.5ms/cycle).

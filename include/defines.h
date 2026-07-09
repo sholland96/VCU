@@ -90,6 +90,10 @@ Adafruit_ADS1115 ads;
 // STBY pins lifted from GND on SK Pang board and wired to this pin.
 #define CAN_STBY_PIN      32
 
+// CAN2 RXD wake input — MCP2562 in standby still drives RXD low on dominant bus edges,
+// allowing the EVCC to wake the VCU without KLR. CANRX2 / UART RX1 = pin 0 (confirmed).
+#define CAN2_RX_PIN       0
+
 // TPS131PXQ1EVM-400 active pre-charge enable (TIDA-050082).
 // Drive HIGH to enable; LOW to disable. Monitored by check_PreCharge() via IVT U2.
 #define PRECHARGE_EN_PIN  34
