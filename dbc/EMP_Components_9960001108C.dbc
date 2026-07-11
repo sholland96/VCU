@@ -1,0 +1,118 @@
+VERSION ""
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_:
+
+BO_ 2565865214 MCM_MotorCommandMessage: 8 Vector__XXX
+ SG_ MCM_PercentMotorSpeedCommand : 24|8@1+ (0.5,0) [0|125] "%" Vector__XXX
+ SG_ MCM_MotorSpeedCommand : 8|16@1+ (0.5,0) [0|32127.5] "rpm" Vector__XXX
+ SG_ MCM_PowerHoldCommand : 2|2@1+ (1,0) [0|3] "" Vector__XXX
+ SG_ MCM_OnOffDirectionCommand : 0|2@1+ (1,0) [0|3] "" Vector__XXX
+ 
+BO_ 2566849534 MSM1_MotorStatusMessage1: 8 Vector__XXX
+ SG_ MSM1_MeasuredPercentMotorSpeed : 56|8@1+ (0.5,0) [0|125] "%" Vector__XXX
+ SG_ MSM1_MeasuredMotorPower : 40|16@1+ (1,0) [0|64255] "W" Vector__XXX
+ SG_ MSM1_MeasuredMotorSpeed : 8|16@1+ (0.5,0) [0|32127.5] "rpm" Vector__XXX
+ SG_ MSM1_ControllerStatus : 2|5@1+ (1,0) [0|31] "" Vector__XXX
+ SG_ MSM1_OnOffDirectionStatus : 0|2@1+ (1,0) [0|3] "" Vector__XXX
+
+BO_ 2566865918 MET_MeasuredExternalTemperature: 8 Vector__XXX
+ SG_ MET_ExternalTemperatureMeasured : 8|16@1+ (0.03125,-273) [-273|1734.96875] "C" Vector__XXX
+
+BO_ 2566857726 MSM2_MotorStatusMessage2: 8 Vector__XXX
+ SG_ MSM2_OperationStatus : 58|2@1+ (1,0) [0|3] "" Vector__XXX
+ SG_ MSM2_ServiceIndicator : 56|2@1+ (1,0) [0|3] "" Vector__XXX
+ SG_ MSM2_MeasuredMotorPower : 40|16@1+ (0.5,0) [0|32127.5] "W" Vector__XXX
+ SG_ MSM2_MeasuredExternalTemp : 24|16@1+ (0.03125,-273) [-273|1734.96875] "C" Vector__XXX
+ SG_ MSM2_MeasuredMotorSpeed : 8|16@1+ (0.5,0) [0|32127.5] "rpm" Vector__XXX
+ SG_ MSM2_CommandStatus : 6|2@1+ (1,0) [0|3] "" Vector__XXX
+ SG_ MSM2_ControllerStatus : 2|4@1+ (1,0) [0|15] "" Vector__XXX
+ SG_ MSM2_OnOffDirectionStatus : 0|2@1+ (1,0) [0|3] "" Vector__XXX
+ 
+BO_ 2566857982 MSM3_MotorStatusMessage3: 8 Vector__XXX
+ SG_ MSM3_HVILstatus : 32|2@1+ (1,0) [0|3] "" Vector__XXX
+ SG_ MSM3_MotorCurrent : 16|16@1+ (0.05,-1600) [-1600|1612.75] "A" Vector__XXX
+ SG_ MSM3_MotorVoltage : 0|16@1+ (0.05,0) [0|3212.75] "V" Vector__XXX
+
+BA_DEF_ BO_  "GenMsgSendType" ENUM  "cyclic","reserved","cyclicIfActive","reserved","reserved","reserved","reserved","reserved","noMsgSendType";
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 3600000;
+BA_DEF_ BO_  "VFrameFormat" ENUM  "StandardCAN","ExtendedCAN","reserved","J1939PG";
+BA_DEF_  "DBName" STRING ;
+BA_DEF_  "BusType" STRING ;
+BA_DEF_  "ProtocolType" STRING ;
+
+BA_DEF_DEF_  "GenMsgSendType" "noMsgSendType";
+BA_DEF_DEF_  "GenMsgCycleTime" 0;
+BA_DEF_DEF_  "VFrameFormat" "J1939PG";
+BA_DEF_DEF_  "DBName" "";
+BA_DEF_DEF_  "BusType" "CAN";
+BA_DEF_DEF_  "ProtocolType" "J1939";
+
+BA_ "DBName" "EMP_Components";
+BA_ "BusType" "CAN";
+BA_ "ProtocolType" "J1939";
+
+BA_ "GenMsgSendType" BO_ 2565865214 0;
+BA_ "GenMsgCycleTime" BO_ 2565865214 1000;
+BA_ "VFrameFormat" BO_ 2565865214 3;
+
+BA_ "GenMsgSendType" BO_ 2566849534 0;
+BA_ "GenMsgCycleTime" BO_ 2566849534 1000;
+BA_ "VFrameFormat" BO_ 2566849534 3;
+
+BA_ "GenMsgSendType" BO_ 2566865918 0;
+BA_ "GenMsgCycleTime" BO_ 2566865918 1000;
+BA_ "VFrameFormat" BO_ 2566865918 3;
+
+BA_ "GenMsgSendType" BO_ 2566857726 0;
+BA_ "GenMsgCycleTime" BO_ 2566857726 1000;
+BA_ "VFrameFormat" BO_ 2566857726 3;
+
+BA_ "GenMsgSendType" BO_ 2566857982 0;
+BA_ "GenMsgCycleTime" BO_ 2566857982 100;
+BA_ "VFrameFormat" BO_ 2566857982 3;
+
+VAL_ 2565865214 MCM_PowerHoldCommand 3 "Don't Care / Take No Action" 2 "Reserved" 1 "Power On" 0 "Power Off" ;
+VAL_ 2565865214 MCM_OnOffDirectionCommand 3 "Don't Care / Take No Action" 2 "Motor On: Reverse Direction" 1 "Motor On: Normal/Dflt Direction" 0 "Motor Off" ;
+
+VAL_ 2566849534 MSM1_ControllerStatus 31 "Not Available" 30 "Temperature Rollback" 29 "Operating at Torque Limit" 28 "Operating at Max Control Effort" 27 "Operating at Amperage Limit" 26 "EMP Use Only" 25 "Over-Temperature Protect Shutdn" 24 "EMP Use Only" 23 "Under-Voltage Protect Shutdn" 22 "Over-Voltage Protect Shutdn" 21 "EMP Use Only" 20 "Unable to Start" 19 "EMP Use Only" 18 "EMP Use Only" 17 "EMP Use Only" 16 "OK/ Normal Operation" 15 "Reserved" 14 "Reserved" 13 "Reserved" 12 "Reserved" 11 "Reserved" 10 "Reserved" 9 "Reserved" 8 "Reserved" 7 "Reserved" 6 "Over-Voltage Rollback" 5 "Reserved" 4 "Reserved" 3 "Reserved" 2 "Reserved" 1 "Reserved" 0 "Exceed Cmd Spd By Extrnal Forces" ;
+VAL_ 2566849534 MSM1_OnOffDirectionStatus 3 "Not Available" 2 "Motor On: Reverse Direction" 1 "Motor On: Normal/Dflt Direction" 0 "Motor Off" ;
+
+VAL_ 2566857726 MSM2_OnOffDirectionStatus 3 "Not Available" 2 "Motor On: Reverse Direction" 1 "Motor On: Normal/Dflt Direction" 0 "Motor Off" ;
+VAL_ 2566857726 MSM2_ControllerStatus 15 "Not Available" 14 "Reserved" 13 "Reserved" 12 "Reserved" 11 "Spd Limit By Over-Volt Protect" 10 "Reserved" 9 "Exceed Cmd Spd By Extrnal Forces" 8 "Spd Limit By Over-Temp Protect" 7 "Speed Limited By Torque Limit" 6 "Speed Limited By Max Capability" 5 "Speed Limited By Amperage Limit" 4 "Over-Temperature Protect Shutdn" 3 "Under-Voltage Protect Shutdn" 2 "Over-Voltage Protect Shutdn" 1 "Unable to Start" 0 "Normal Operation" ;
+VAL_ 2566857726 MSM2_CommandStatus 3 "Not Available" 2 "Command is Default" 1 "Command is External" 0 "Command is Internal" ;
+VAL_ 2566857726 MSM2_ServiceIndicator 3 "Not Available" 2 "Reserved" 1 "Service Required" 0 "Service Not Required" ;
+VAL_ 2566857726 MSM2_OperationStatus 3 "Not Available" 2 "Not Operable" 1 "Derated Operation" 0 "Normal Operation" ;
+
+VAL_ 2566857982 MSM3_HVILstatus 3 "Not Available" 2 "Error" 1 "HVIL Open" 0 "HVIL Closed" ;

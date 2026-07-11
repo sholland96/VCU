@@ -15,7 +15,8 @@ Built with PlatformIO / Arduino framework.
 | LIN | Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) — GNSS UART is on Serial2, no conflict |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
 | ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN_ONE ±4.096 V, 860 SPS) |
-| DCFC | Advantics ADM-CS-EVCC CCS/AC charge controller (CAN2 @ 500 kbps, Generic PEV protocol v2.x) |
+| DCFC | Advantics ADM-CS-EVCC CCS/CHAdeMO charge controller (CAN2 @ 500 kbps, Generic Power Modules protocol) |
+| OBC | Elcon UHF-CAN-312 on-board charger for AC charging *(not yet implemented)* |
 | Throttle | EVWest dual-pot (OEM pedal) — ADS1115 AIN0 (track 1) / AIN1 (track 2) |
 | Brake | Brake pressure sensor — ADS1115 AIN2 |
 
@@ -25,7 +26,7 @@ Built with PlatformIO / Arduino framework.
 
 ### CAN1 — 500 kbps
 
-Devices: pMBB32 battery management modules (×3), PDU-8 power distribution unit
+Devices: pMBB32 battery management modules (×3), PDU-8 power distribution unit, EMP WP29-12V-CV-A battery cooling pump
 
 **Transmitted (VCU → device)**
 
@@ -35,34 +36,34 @@ Devices: pMBB32 battery management modules (×3), PDU-8 power distribution unit
 | `0xCF0100 / 02 / 03` | Extended | Request min/max cell voltages from pMBB32 #1 / #2 / #3 |
 | `0xAF0100 / 02 / 03` | Extended | pMBB32 mode command — see two-command startup sequence below |
 
-**pMBB32 startup sequence (sent once at power-on via `wakepMBB32()`):**
+**pMBB32 startup sequence (sent once at power-on via `wakepMBB32()`, after a 500 ms PDU CH2 settle delay):**
 
-Step 1 — Wake (3 bytes):
+Wake command (3 bytes, sent to each module's SA address):
 
 | Byte | Value | Meaning |
 |------|-------|---------|
-| 0 | `0x01` (`wakeup`) | Wake command |
+| 0 | `0x01` (`wakeup`) | Wake and initialise BMS ASICs |
 | 1 | `0x10` (`channelCount16`) | Number of cell channels (16) |
 | 2 | `0x02` (`numberOfDevices`) | Number of AFE ICs per module (2) |
 
-Step 2 — Enable continuous reporting (1 byte, sent separately to each module):
+After wake, `0xFF0000` is sent every 200 ms to trigger measurement cycles (trigger-based polling). Continuous auto-broadcast mode (enabled by sending `[0x10]` to each module's SA) is not used — polling gives the VCU explicit control over measurement timing and simplifies stale detection.
 
-| Byte | Value | Meaning |
-|------|-------|---------|
-| 0 | `0x10` (`contReportingEnable`) | Enable continuous cell voltage broadcast |
-
-Step 3 — Send `0xFF0000` to trigger the first measurement cycle.
-
-After startup, `0xFF0000` is sent every 200 ms to keep measurements running.
-
-**Stale recovery** — each module has a counter incremented every 200 ms in `callback_t2()` and reset to 0 whenever a cell-voltage CAN frame arrives. If the counter exceeds 5 ticks (> 1 s without a frame), recovery begins:
+**Stale recovery** — each module has a counter incremented every 200 ms in `callback_t2()` and reset to 0 whenever a cell-voltage CAN frame (ft=01..0C) arrives. A 10 s startup grace period suppresses recovery while modules complete initialisation. After the grace period, if the counter exceeds 5 ticks (> 1 s without a frame), recovery begins:
 
 1. **Shutdown** — send `0x55` (shutdown) to the stale module.
-2. **Wake** — after 2 s, send wake + `contReportingEnable`; decrement retry credit.
+2. **Wake** — after 500 ms, send the wake command; decrement retry credit.
 3. Steps 1–2 repeat up to 3 times per module.
-4. **CH2 power cycle** — if retries are exhausted, `PDUmsg1` CH2 is set to 0 (PDU-8 cuts power to all pMBB32s for 1 s), then restored. After a 3 s boot-settling wait, wake + `contReportingEnable` is sent to all three modules and retry credits reset. The cycle repeats indefinitely until all modules respond.
+4. **CH2 power cycle** — if retries are exhausted, `PDUmsg1` CH2 is set to 0 (PDU-8 cuts power to all pMBB32s for 1 s), then restored. After a 1 s boot-settling wait, wake is sent to all three modules and retry credits reset. The cycle repeats indefinitely until all modules respond.
+
+**Corruption detection** — two silent failure modes are detected and corrected automatically:
+
+- **Ghost SA** (`TOTAL_ICS` corruption): if a pMBB32 module's `TOTAL_ICS` is corrupted during initialisation it broadcasts on SA+0..SA+7, flooding the bus with up to 96 frames per trigger while the legitimate SA=1..3 frames still reset the stale counter. Detected by watching for `modNum ≥ 4` in `0x18FFxxxx` frames. If sustained for 2 s (debounced), a CH2 power cycle is triggered.
+- **Absent ft=03** (`numChannels` corruption): if `numChannels` is corrupted to 0, cells 9–32 are silently omitted (the module only broadcasts ft=01/02) while stale counters continue to reset normally. Detected every 5 s by checking whether ft=01 arrived without ft=03 in the same window. If detected, the affected module's stale counter is forced to 255 to trigger shutdown→wake recovery; the check is then suppressed for 30 s to allow recovery to complete.
+
+Both detections are cleared when a CH2 power cycle completes.
 | `0x0A0620` | Extended | PDU-8 driver settings — PDUmsg1 - channel current limits (sent every 62.5 ms) |
 | `0x0A0630` | Extended | PDU-8 driver outputs — PDUmsg2 - channel PWM duty cycles *(disabled, unverified)* |
+| `0x18EF{pump}{vcu}` | Extended | EMP WP29 battery cooling pump Motor Command (sent every 200 ms via CAN1; byte 0: 0xFD=on/0xFC=off; byte 3: %×2) |
 
 **PDU-8 `0x0A0620` byte map** — current limit register: A ÷ 0.4 (e.g. 5 A → 0x0D, 2 A → 0x05, 0 = off)
 
@@ -89,6 +90,8 @@ After startup, `0xFF0000` is sent every 200 ms to keep measurements running.
 | ID | Description |
 |----|-------------|
 | `0x18FF0E01 / 02 / 03` | pMBB32 #1 / #2 / #3 min/max cell voltage report |
+| `0x18FF03{pump}` | EMP WP29 battery cooling pump Motor Status 1 (1 Hz — speed, temp, power, controller status) |
+| `0x18FF24{pump}` | EMP WP29 battery cooling pump Motor Status 3 (100 ms — voltage, current, HVIL) |
 
 **Received — defined in pMBB32.h, not yet decoded**
 
@@ -109,20 +112,20 @@ After startup, `0xFF0000` is sent every 200 ms to keep measurements running.
 
 ### CAN2 — 500 kbps
 
-Devices: IVT-MOD, SIM100MOD, CAN keypad, OpenInverter Tesla LDU (v5 board), EMP WP29-12V-CV-A water pump, Advantics ADM-CS-EVCC DC fast charge controller
+Devices: Isabellenhuette IVT-S-1K-U3-I-CAN1-12V, SIM100MOD, CAN keypad, OpenInverter Tesla LDU (v5 board), EMP WP29-12V-CV-A inverter cooling pump, Advantics ADM-CS-EVCC DC fast charge controller
 
 **Transmitted (VCU → device)**
 
 | ID | Type | Rate | Description |
 |----|------|------|-------------|
-| `0x412` | Standard | on demand | IVT-MOD command (SET_MODE, configure measurements) |
+| `0x412` | Standard | on demand | IVT-S command (SET_MODE, configure measurements) |
 | `0xA100101` | Extended | 200 ms | SIM100MOD isolation poll |
-| `0x18EF{pump}{vcu}` | Extended | 200 ms | EMP WP29 pump Motor Command (byte 0: 0xFD=on/0xFC=off; byte 3: %×2) |
+| `0x18EF{pump}{vcu}` | Extended | 200 ms | EMP WP29 inverter cooling pump Motor Command (CAN2; byte 0: 0xFD=on/0xFC=off; byte 3: %×2) |
 | `0x18EF2100` | Extended | on demand | CAN keypad LED colour / mode command |
 | `0x201` | Standard | **10 ms** | OpenInverter LDU fixed safety frame (see below) |
-| `0x610` | Standard | 62.5 ms | EVCC EV_Information — State_of_Charge (%), Energy_Capacity (kWh × 0.1) |
-| `0x612` | Standard | 62.5 ms | EVCC DC_Status1 — Max_Charge_Current, Present_Current, Max_Discharge_Current, Target_Voltage |
-| `0x613` | Standard | 62.5 ms | EVCC DC_Status2 — Contactors_Closed, Normal_End_of_Charge, Emergency_Stop, Battery_Voltage (IVT U1), Inlet_Voltage (IVT U3) |
+| `0x60010` | Extended | 62.5 ms | EVCC Power_Modules_Status — Present_Voltage (IVT U1, 0.1 V), Present_Current (IVT I, 0.1 A signed), System_Enable, Insulation_R (SIM100MOD Rp, 2 kΩ/bit) |
+| `0x60011` | Extended | 62.5 ms | EVCC Power_Modules_Limits — Max_Voltage (0.1 V), Max_Current (0.1 A signed) |
+| `0x60012` | Extended | 62.5 ms | EVCC Sequence_Control — Start_Charge_Authorisation, CHAdeMO_Start_Button, CCS_Auth_Done/Valid, Charge_Parameters_Done, User_Stop_Button |
 
 **OpenInverter LDU 0x201 frame — v5.32+ fixed bit-packed layout**
 
@@ -167,24 +170,28 @@ save
 
 | ID | Rate | Description |
 |----|------|-------------|
-| `0x621` | 20 ms | IVT-MOD current |
-| `0x622` | 60 ms | IVT-MOD pack voltage U1 (Pack+) |
-| `0x623` | 60 ms | IVT-MOD pre-charge voltage U2 (DC-Link+) |
-| `0x624` | 60 ms | IVT-MOD DCFC inlet voltage U3 (DCFC+) |
-| `0x625` | 200 ms | IVT-MOD temperature |
-| `0x626` | 30 ms | IVT-MOD power |
-| `0x627` | 30 ms | IVT-MOD coulomb counter |
-| `0x628` | 30 ms | IVT-MOD energy counter |
+| `0x621` | 20 ms | IVT-S current (mA, signed) |
+| `0x622` | 60 ms | IVT-S pack voltage U1 — Pack+ (mV) |
+| `0x623` | 60 ms | IVT-S pre-charge voltage U2 — DC-Link+ (mV) |
+| `0x624` | 60 ms | IVT-S DCFC inlet voltage U3 — DCFC+ (mV) |
+| `0x625` | 200 ms | IVT-S temperature (°C, signed) |
+| `0x626` | 30 ms | IVT-S power (W, signed) |
+| `0x627` | 30 ms | IVT-S coulomb counter (As, signed) |
+| `0x628` | 30 ms | IVT-S energy counter (Wh, signed) |
 | `0x18EFFF21` | on event | CAN keypad button press / release |
 | `0xA100100` | on request | SIM100MOD isolation state / measurements |
 | `0x19A` | — | OpenInverter LDU status *(TODO: confirm ID from inverter `can tx` output)* |
 | `0x55A` | — | OpenInverter LDU faults *(TODO: confirm ID)* |
-| `0x18FF03{pump}` | 1 Hz | EMP WP29 Motor Status Message 1 (speed, temp, power, controller status) |
-| `0x18FF24{pump}` | 100 ms | EMP WP29 Motor Status Message 3 (voltage, current, HVIL status) |
-| `0x600` | ~100 ms | EVCC Communication_Stage, Protocol, Pins, Max_Current |
-| `0x602` | ~100 ms | EVCC Close_Contactors signal (EVCC drives its own hardware; VCU monitors only) |
-| `0x604` | ~1 s | EVCC DC contactor positive/negative feedback, temperatures |
-| `0x605` | on event | EVCC diagnostic fault flags |
+| `0x18FF03{pump}` | 1 Hz | EMP WP29 inverter cooling pump Motor Status 1 (speed, temp, power, controller status) |
+| `0x18FF24{pump}` | 100 ms | EMP WP29 inverter cooling pump Motor Status 3 (voltage, current, HVIL status) |
+| `0x68001` | on plug-in | EVCC New_Charge_Session — Communication_Protocol, Plug_and_pins (0=CCS_DC_Core, 1=CCS_DC_Extended, 2=CHAdeMO), EV_Max_Voltage/Current, Battery_Capacity, SoC |
+| `0x68002` | on demand | EVCC Insulation_Test — informational |
+| `0x68003` | on demand | EVCC Precharge — informational |
+| `0x68004` | on demand | EVCC Charge_Status_Change — Vehicle_Ready_for_Charging |
+| `0x68005` | during charge | EVCC Charging_Loop — Target_Voltage, Target_Current, SoC |
+| `0x68006` | on event | EVCC Emergency_Stop — Origin; clears EVCCsessionActive / EVCCsystemEnable |
+| `0x68007` | on event | EVCC Charge_Session_Finished; clears EVCCsessionActive / EVCCsystemEnable |
+| `0x68009` | 200 ms | EVCC Advantics_Controller_Status — State (heartbeat; absence implies EVCC fault) |
 
 ---
 
@@ -278,7 +285,7 @@ The VCU uses two top-level regions separated by the physical key switch:
 
 Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the KL15 start button (keypad button 5).
 
-Turning the key off (KLR low) while in the Off state triggers `enterSleep()` after a 500 ms debounce (KLR must be continuously low for 500 ms). The debounce gives the EVCC five broadcast periods to announce itself after a CAN2 wake before sleep is re-entered. `enterSleep()` returns immediately if `EVCCstage > 0` (active DCFC session), keeping the VCU awake without KLR.
+Turning the key off (KLR low) while in the Off state triggers `enterSleep()` after a 500 ms debounce (KLR must be continuously low for 500 ms). The debounce gives the EVCC time to send `New_Charge_Session` (0x68001) after a CAN2 wake before sleep is re-entered. `enterSleep()` returns immediately if `EVCCsessionActive` is true (active charge session), keeping the VCU awake without KLR.
 
 1. All four timers stop; heartbeat LED is forced off.
 2. USB PHY is powered down (`USBPHY1_PWD = 0xFFFFFFFF`) and its CCM clock gated.
@@ -365,8 +372,8 @@ Key Contact state message format (PKP2400SI J1939 §6, event-driven by default):
 | Timer | Hardware | Period | Work |
 |-------|----------|--------|------|
 | **t0** | PIT (IntervalTimer) | **10 ms** | Throttle pipeline (read/verify/arbitrate/map); assemble and send LDU 0x201 safety frame |
-| t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update; EVCC battery status (0x610/0x612/0x613) |
-| t2 | GPT1 | 200 ms | Send `0xFF0000` measurement trigger; invalidate stale module data; stale module recovery (wake + contReportingEnable); SIM100MOD isolation poll; LIN valve poll |
+| t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update; EVCC Power_Modules_Status / Limits / Sequence_Control (0x60010 / 0x60011 / 0x60012) |
+| t2 | GPT1 | 200 ms | Send `0xFF0000` measurement trigger; invalidate stale module data; stale module recovery (wake + contReportingEnable); SIM100MOD isolation poll; LIN valve poll; inverter pump command (CAN2); battery pump command (CAN1) |
 | t3 | GPT2 | 1000 ms | Heartbeat LED toggle |
 | main loop | — | free-running | CAN event dispatch; GNSS processing; FSM step |
 
@@ -377,6 +384,13 @@ t0 runs at the highest ARM Cortex-M7 NVIC priority (`priority(0)`) and preempts 
 ## Building
 
 Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Code and click **Build (✓)** in the PlatformIO toolbar.
+
+### Environments
+
+| Environment | Command | Purpose |
+|-------------|---------|---------|
+| `teensy41` (default) | `pio run` | Main VCU firmware |
+| `pMBB32_test` | `pio run -e pMBB32_test -t upload` | pMBB32 bench-test sketch — enables PDU-8 CH2, wakes all three modules, cycles through shutdown/wake for each, then enters continuous polling with a 5 s status report. Use to validate pMBB32 hardware and firmware without the full VCU stack. Monitor with `pio device monitor`. |
 
 ### Dependencies (auto-installed by PlatformIO)
 
@@ -396,10 +410,13 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 - **OpenInverter CRC** — implement `crc_calculate_block` equivalent and set `controlcheck 1` on inverter once formula is confirmed from stm32-sine source
 - **Brake calibration** — bench-calibrate `BRAKE_THRESHOLD` (ADS1115 counts) against actual sensor output
 - **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` (ADS1115 counts; current values are ×8 approximations of old 12-bit readings)
-- **EVCC calibration** — set `EVCC_CELL_V_EMPTY` / `EVCC_CELL_V_FULL` (pMBB32 raw counts) for actual cell chemistry; set `EVCC_MAX_CHARGE_A` and `EVCC_TARGET_V` for pack limits; set `EVCC_PACK_ENERGY_X10` for actual pack capacity
-- **EMP WP29 pump** — confirm pump J1939 source address (`EMP_WP29_ADDR` in defines.h, currently `0x8A`) via CAN sniffer or DBC file; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
+- **EVCC calibration** — set `EVCC_CELL_V_EMPTY` / `EVCC_CELL_V_FULL` (pMBB32 raw counts) for actual cell chemistry; set `EVCC_MAX_VOLTAGE_x10` and `EVCC_MAX_CURRENT_x10` for pack charge limits
+- **EVCC AC charging** — detect AC plug-in from `New_Charge_Session` (0x68001) `Plug_and_pins` field; AC value not in current DBC — confirm with Advantics; wire to FSM pre-charge path with main contactors; split `VCU_STATE_CHARGE` into `VCU_STATE_DCFC` and `VCU_STATE_AC_CHARGE`
+- **Elcon UHF-CAN-312 OBC** — implement AC on-board charger CAN interface for AC charging path; assign to CAN bus; add EVCC→OBC current forwarding
+- **EMP WP29 pumps** — confirm pump J1939 source address (`EMP_WP29_ADDR`, currently `0x8A`) matches both pumps via CAN sniffer; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
 - **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
-- **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-MOD U2 (pre-charge voltage)
+- **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-S U2 (pre-charge voltage)
 - **Regen braking** — implement `pot2` / `regenpreset` fields in the LDU frame; wire to brake pressure or paddle
-- **pMBB32 individual cell voltages** — broadcast frames received but not decoded in `can1Sniff()`
+- **pMBB32 individual cell voltages** — broadcast frames (ft=01..0C) received but not decoded in `can1Sniff()`; only min/max summary (ft=0E) is currently used
+- **Cell balancing** — pMBB32 modules perform autonomous balancing when `maxCellDelta > 5 mV`; add VCU-directed balancing commands (`0x00DFxx00`) during charging near top of charge for tighter cell matching
 - **IVT fault detection** — populate `IVTfaultActive` in `can2Sniff()` when pack current or voltage is out of safe range

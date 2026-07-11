@@ -1,0 +1,164 @@
+VERSION "Jul 21, 2022"
+
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: VCU CCU
+
+
+BO_ 531 DCDC_CMD: 8 VCU
+ SG_ DCDC_OutputEnableCMD_CCU : 7|8@0+ (1,0) [0|255] "" Vector__XXX
+ SG_ DCDC_OutputVoltageCMD_CCU : 15|16@0+ (0.1,0) [0|6553.5] "voltage:V" Vector__XXX
+ SG_ DCDC_OutputCurrentCMD_CCU : 31|16@0+ (0.1,0) [0|6553.5] "current:A" Vector__XXX
+
+BO_ 609 OBC_CMD: 8 VCU
+ SG_ OBC_ControlCMD_CCU : 39|8@0+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 610 OBC_CMD2: 8 VCU
+ SG_ OBC_MaxChargingVoltageCMD_CCU : 7|16@0+ (0.1,0) [0|6553.5] "voltage:V" Vector__XXX
+ SG_ OBC_MaxChargingCurrentCMD_CCU : 23|16@0+ (0.1,0) [0|6553.5] "current:A" Vector__XXX
+
+BO_ 787 DCDC_State: 8 CCU
+ SG_ DCDC_FaultRank_CCU : 3|2@0+ (1,0) [0|3] "" Vector__XXX
+ SG_ DCDC_OutputStatus_CCU : 7|4@0+ (1,0) [0|15] "" Vector__XXX
+ SG_ DCDC_InputOverVoltageAlarm_CCU : 8|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_InputOverCurrentAlarm_CCU : 9|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_OutputOverVoltageAlarm_CCU : 10|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_OutputShrtCrcuitProtec_CCU : 11|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_OverTempProtect_CCU : 12|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_OutputUnderVoltageAlarm_CCU : 13|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_DowntimeAlarm_CCU : 14|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_LSCurrentSenseFault_CCU : 15|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_TempSensorFault_CCU : 16|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_CommsFault_CCU : 17|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_InternalFault_CCU : 19|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ DCDC_HVInputVoltage_CCU : 31|16@0+ (0.1,0) [0|6553.5] "voltage:V" Vector__XXX
+ SG_ DCDC_HVCurrentUsage_CCU : 47|8@0+ (0.1,0) [0|25.5] "current:A" Vector__XXX
+ SG_ DCDC_DTCCode_CCU : 55|8@0+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 803 DCDC_State2: 8 CCU
+ SG_ DCDC_OutputVoltage_CCU : 7|16@0+ (0.1,0) [0|6553.5] "voltage:V" Vector__XXX
+ SG_ DCDC_OutputCurrent_CCU : 23|16@0+ (0.1,0) [0|6553.5] "current:A" Vector__XXX
+ SG_ DCDC_Temp_CCU : 39|8@0+ (1,-40) [-40|215] "temp:C" Vector__XXX
+
+BO_ 806 OBC_State: 8 CCU
+ SG_ OBC_ChargingVoltage_CCU : 7|16@0+ (0.1,0) [0|6553.5] "voltage:V" Vector__XXX
+ SG_ OBC_ChargingCurrent_CCU : 23|16@0+ (0.1,0) [0|6553.5] "current:A" Vector__XXX
+ SG_ OBC_HardwareFailureStatus_CCU : 32|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ OBC_TemperatureStatus_CCU : 33|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ OBC_InputVoltageStatus_CCU : 34|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ OBC_PowerStatus_CCU : 35|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ OBC_CommsStatus_CCU : 36|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ OBC_HVBatteryConnected_CCU : 37|1@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ OBC_Temp_CCU : 47|8@0+ (1,-40) [-40|215] "temp:C" Vector__XXX
+
+BO_ 838 OBC_State2: 8 CCU
+ SG_ OBC_ACInputVoltage_CCU : 7|16@0+ (0.1,0) [0|6553.5] "voltage:V" Vector__XXX
+ SG_ OBC_ChargerCurrentLimit_CCU : 39|8@0+ (0.1,0) [0|25.5] "current:A" Vector__XXX
+ SG_ OBC_ChargerOutputVoltage_CCU : 47|16@0+ (0.1,0) [0|6553.5] "current:A" Vector__XXX
+ SG_ OBC_ChargingStatus_CCU : 59|4@0+ (1,0) [0|15] "" Vector__XXX
+ SG_ OBC_ErrorFlag_CCU : 63|4@0+ (1,0) [0|15] "" Vector__XXX
+
+BO_ 870 OBC_State3: 8 CCU
+ SG_ OBC_ACInputCurrent_CCU : 7|16@0+ (0.1,0) [0|6553.5] "current:A" Vector__XXX
+ SG_ OBC_DTCCode_CCU : 23|8@0+ (1,0) [0|255] "" Vector__XXX
+
+
+
+CM_ SG_ 531 DCDC_OutputEnableCMD_CCU "DCDC enable request";
+CM_ SG_ 531 DCDC_OutputVoltageCMD_CCU "DCDC output voltage setting";
+CM_ SG_ 531 DCDC_OutputCurrentCMD_CCU "DCDC Max output current setting";
+CM_ SG_ 609 OBC_ControlCMD_CCU "Charge mode request";
+CM_ SG_ 610 OBC_MaxChargingVoltageCMD_CCU "Maximum allowable charging voltage";
+CM_ SG_ 610 OBC_MaxChargingCurrentCMD_CCU "Maximum allowable charging current";
+CM_ SG_ 787 DCDC_FaultRank_CCU "DCDC fault rank";
+CM_ SG_ 787 DCDC_OutputStatus_CCU "DCDC working state";
+CM_ SG_ 787 DCDC_InputOverVoltageAlarm_CCU "HV over voltage protection";
+CM_ SG_ 787 DCDC_InputOverCurrentAlarm_CCU "HV over current protection";
+CM_ SG_ 787 DCDC_OutputOverVoltageAlarm_CCU "LV over voltage protection";
+CM_ SG_ 787 DCDC_OutputShrtCrcuitProtec_CCU "LV side short(DCDC output)";
+CM_ SG_ 787 DCDC_OverTempProtect_CCU "DCDC over temperature protection";
+CM_ SG_ 787 DCDC_OutputUnderVoltageAlarm_CCU "LV under voltage protection";
+CM_ SG_ 787 DCDC_TempSensorFault_CCU "Temperature sensor error";
+CM_ SG_ 787 DCDC_CommsFault_CCU "VCU CAN timeout";
+CM_ SG_ 787 DCDC_InternalFault_CCU "Run fail";
+CM_ SG_ 787 DCDC_HVInputVoltage_CCU "HV side voltage";
+CM_ SG_ 787 DCDC_HVCurrentUsage_CCU "HV side current";
+CM_ SG_ 787 DCDC_DTCCode_CCU "DCDC DTC";
+CM_ SG_ 803 DCDC_OutputVoltage_CCU "LV side voltage (DCDC output voltage)";
+CM_ SG_ 803 DCDC_OutputCurrent_CCU "LV side current (DCDC output current)";
+CM_ SG_ 803 DCDC_Temp_CCU "DCDC temperature";
+CM_ SG_ 806 OBC_ChargingVoltage_CCU "Actual HV side voltage";
+CM_ SG_ 806 OBC_ChargingCurrent_CCU "Actual HV side current";
+CM_ SG_ 806 OBC_HardwareFailureStatus_CCU "Hardware status";
+CM_ SG_ 806 OBC_TemperatureStatus_CCU "OBC temperature status";
+CM_ SG_ 806 OBC_InputVoltageStatus_CCU "AC side voltage error";
+CM_ SG_ 806 OBC_PowerStatus_CCU "OBC power state";
+CM_ SG_ 806 OBC_CommsStatus_CCU "CAN communication timeout";
+CM_ SG_ 806 OBC_HVBatteryConnected_CCU "HV side battery connection status";
+CM_ SG_ 806 OBC_Temp_CCU "OBC temperature";
+CM_ SG_ 838 OBC_ACInputVoltage_CCU "AC side voltage (OBC input voltage)";
+CM_ SG_ 838 OBC_ChargerCurrentLimit_CCU "HV side current limit";
+CM_ SG_ 838 OBC_ChargerOutputVoltage_CCU "HV side voltage";
+CM_ SG_ 838 OBC_ChargingStatus_CCU "OBC charge status";
+CM_ SG_ 838 OBC_ErrorFlag_CCU "OBC error flag";
+CM_ SG_ 870 OBC_ACInputCurrent_CCU "AC side current (OBC input current)";
+CM_ SG_ 870 OBC_DTCCode_CCU "OBC DTC";
+BA_DEF_ BO_  "DBC_Author" STRING ;
+BA_DEF_ BO_  "DBC_Author_Contact" STRING ;
+BA_DEF_DEF_  "DBC_Author" "AEM_EV";
+BA_DEF_DEF_  "DBC_Author_Contact" "CANbusInfo@AEMelectronics.com";
+VAL_ 531 DCDC_OutputEnableCMD_CCU 170 "Start" 85 "Stop" ;
+VAL_ 609 OBC_ControlCMD_CCU 3 "Charge Complete" 2 "Heating" 1 "Battery Protection, Charge Stopped" 0 "Charging" ;
+VAL_ 787 DCDC_FaultRank_CCU 3 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_OutputStatus_CCU 6 "Shutdown" 5 "Power off" 4 "Work" 3 "HV Batt OK" 2 "Standby" 1 "Init" 0 "Reserved" ;
+VAL_ 787 DCDC_InputOverVoltageAlarm_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_InputOverCurrentAlarm_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_OutputOverVoltageAlarm_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_OutputShrtCrcuitProtec_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_OverTempProtect_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_OutputUnderVoltageAlarm_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_DowntimeAlarm_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_LSCurrentSenseFault_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_TempSensorFault_CCU 1 "Fault" 0 "OK" ;
+VAL_ 787 DCDC_CommsFault_CCU 1 "Timeout" 0 "OK" ;
+VAL_ 787 DCDC_InternalFault_CCU 1 "Fault" 0 "OK" ;
+VAL_ 806 OBC_HardwareFailureStatus_CCU 1 "Fault" 0 "OK" ;
+VAL_ 806 OBC_TemperatureStatus_CCU 1 "Fault" 0 "OK" ;
+VAL_ 806 OBC_InputVoltageStatus_CCU 1 "Fault" 0 "OK" ;
+VAL_ 806 OBC_PowerStatus_CCU 1 "On" 0 "Off" ;
+VAL_ 806 OBC_CommsStatus_CCU 1 "Fault" 0 "OK" ;
+VAL_ 806 OBC_HVBatteryConnected_CCU 1 "Connected" 0 "Not Connected" ;
+VAL_ 838 OBC_ChargingStatus_CCU 6 "Failure" 5 "Sleep" 4 "Charge OK" 3 "CV charging" 2 "CC charging" 1 "Standby" 0 "Init" ;
+VAL_ 838 OBC_ErrorFlag_CCU 11 "HV over voltage" 10 "HV under voltage" 9 "PFC under voltage" 8 "PFC over voltage" 6 "AC over voltage" 5 "AC under voltage" 4 "CAN time out" 3 "HV over current" 2 "Over temp protection" ;
+

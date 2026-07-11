@@ -151,14 +151,14 @@ uint16_t lowestModule;
 uint16_t highestCellV;
 uint16_t highestCell;
 uint16_t highestModule;
-uint32_t IVTpackCurrent;//1mA resolution
-uint32_t IVTpackVoltage;//1mV resolution
-uint32_t IVTpreChargeV;//1mV resolution
-uint32_t IVTvoltage3;//1mV resolution
-uint32_t IVTtemp;
-uint32_t IVTpower;
-uint32_t IVTcoulombCounter;
-uint32_t IVTenergyCounter;
+int32_t IVTpackCurrent;//1mA resolution, signed (negative = discharge)
+int32_t IVTpackVoltage;//1mV resolution
+int32_t IVTpreChargeV;//1mV resolution
+int32_t IVTvoltage3;//1mV resolution
+int32_t IVTtemp;//0.1°C resolution, signed
+int32_t IVTpower;//1W resolution, signed (negative = regen)
+int32_t IVTcoulombCounter;//1As resolution, signed
+int32_t IVTenergyCounter;//1Wh resolution, signed
 uint16_t SIM100MODohmsPerVolt;
 uint16_t SIM100MODRpKohms;
 uint16_t SIM100MODRnKohms;
@@ -246,58 +246,74 @@ uint8_t  valvePosition = 0;     // last commanded position (encoding TBD)
 uint8_t  valveStatus   = 0;     // last reported status byte
 bool     valveOnline   = false; // true once first valid response received
 
-// EMP WP29-12V-CV-A Smart Flow Water Pump (CAN2 @ 500kbps)
-// Command (VCU → pump): EMP proprietary Motor Command Message
-//   TX ID = 0x18EF{pump_addr}{vcu_addr} — byte 0: On/Off+PowerHold; bytes 1-2: 0xFFFF;
-//   byte 3: %speed × 2 (0.5 %/bit); bytes 4-7: 0xFF. Must send ≥ 1 Hz.
-//   On/Off byte: 0xFD = Motor On (forward) + DNC Power Hold; 0xFC = Motor Off + DNC
-// Status (pump → VCU): Motor Status Message 2 @ 0x18FF23{pump_addr} (1 Hz)
+// EMP WP29-12V-CV-A Smart Flow Water Pump — EMP proprietary protocol (9980001068 Rev. N)
+// Two pumps, same J1939 address (0x8A), on separate buses:
+//   Inverter cooling loop: CAN2 @ 500kbps
+//   Battery cooling loop:  CAN1 @ 500kbps
+// Command (VCU → pump): TX ID = 0x18EF{pump_addr}{vcu_addr}
+//   byte 0: 0xFD = Motor On (fwd) + DNC Power Hold; 0xFC = Motor Off + DNC
+//   byte 3: %speed × 2 (0.5 %/bit); bytes 1-2, 4-7: 0xFF. Must send ≥ 1 Hz.
+// Status (pump → VCU): Motor Status Message 1 @ 0x18FF03{pump_addr} (1 Hz)
 //   byte 0: bits[1:0]=direction, bits[5:2]=controller_status, bits[7:6]=command_src
 //   bytes 1-2: measured speed (little-endian uint16, 0.5 rpm/bit)
 //   bytes 3-4: external temp (little-endian int16, 0.03125 °C/bit, offset −273)
 //   bytes 5-6: motor power (little-endian uint16, 0.5 W/bit)
 //   byte 7: bits[1:0]=service_indicator, bits[3:2]=operation_status
 // Motor Status Message 3 @ 0x18FF24{pump_addr} (100 ms): voltage, current, HVIL
-// Source addresses: confirm pump address via CAN sniffer or DBC file.
-#define EMP_WP29_ADDR    0x8Au   // pump J1939 source address — verify via DBC/sniffer
+#define EMP_WP29_ADDR    0x8Au   // pump J1939 source address — both pumps share this address (separate buses)
 #define VCU_CAN_ADDR     0xA3u   // VCU J1939 source address
 #define EMP_WP29_CMD_ID  (0x18EF0000UL | ((uint32_t)EMP_WP29_ADDR << 8) | VCU_CAN_ADDR)
 #define EMP_WP29_STATUS1 (0x18FF0300UL | EMP_WP29_ADDR)  // Motor Status Message 1 (1 Hz) — confirmed via DBC
 #define EMP_WP29_STATUS3 (0x18FF2400UL | EMP_WP29_ADDR)  // Motor Status Message 3 (100 ms)
-uint16_t pumpActualSpeed;  // raw measured speed (0.5 rpm/bit — divide by 2 for RPM)
-uint8_t  pumpStatus;       // controller status nibble (byte 0 bits[5:2] of Status Msg 2)
-uint8_t  pumpFaults;       // service indicator [1:0] + operation status [3:2] (byte 7)
-uint8_t  pumpSetpoint;     // commanded speed 0–100 %
+// Inverter cooling pump (CAN2)
+uint16_t invPumpSpeed    = 0;  // raw measured speed (0.5 rpm/bit)
+uint8_t  invPumpStatus   = 0;  // controller status nibble (byte 0 bits[5:2])
+uint8_t  invPumpFaults   = 0;  // service indicator [1:0] + operation status [3:2] (byte 7)
+uint8_t  invPumpSetpoint = 0;  // commanded speed 0–100 %
+// Battery cooling pump (CAN1)
+uint16_t battPumpSpeed    = 0;
+uint8_t  battPumpStatus   = 0;
+uint8_t  battPumpFaults   = 0;
+uint8_t  battPumpSetpoint = 0;
 
 // Advantics ADM-CS-EVCC DC Fast Charge Controller (CAN2 @ 500kbps)
-// Generic PEV protocol v2.x, 11-bit standard IDs.
-// EVCC drives DCFC contactors directly via its own hardware outputs.
+// Generic Power Modules protocol — 29-bit extended IDs (DBC raw values have bit 31 set).
+// EVCC drives DCFC contactors autonomously via its own hardware outputs.
 // DCFC inlet connects directly to battery pack — independent of main pack contactors (PDU-8).
 //
-// Received from EVCC (EVCC → VCU, ~100ms)
-#define EVCC_EVSE_INFO   0x600u  // Communication_Stage(8b), Protocol(8b), Pins(8b), Max_Current(16b s A), RCD_Status(1b)
-#define EVCC_DC_CONTROL  0x602u  // Close_Contactors(1b) — EVCC drives its own hardware; VCU monitors only
-#define EVCC_HW_STATUS   0x604u  // DC_Contactor_Pos/Neg_Feedback(1b each), Stop_Charge(1b), temperatures (1000ms)
-#define EVCC_DIAG_STATUS 0x605u  // 26 diagnostic fault flags
+// Received from EVCC (EVCC → VCU, extended IDs)
+#define EVCC_NEW_SESSION    0x68001u  // New_Charge_Session: Protocol(8b), Plug_and_pins(8b), EV_Max_V(16b 0.1V), EV_Max_I(16b 0.1A), Capacity(8b 2kWh), SoC(8b %)
+#define EVCC_INS_TEST       0x68002u  // Insulation_Test — informational
+#define EVCC_PRECHARGE      0x68003u  // Precharge — informational
+#define EVCC_STATUS_CHANGE  0x68004u  // Charge_Status_Change: Vehicle_Ready_for_Charging(8b)
+#define EVCC_CHARGING_LOOP  0x68005u  // Charging_Loop: Target_V(16b 0.1V LE), Target_I(16b s 0.1A LE), SoC(8b %)
+#define EVCC_EMERG_STOP     0x68006u  // Emergency_Stop: Origin(8b)
+#define EVCC_SESSION_END    0x68007u  // Charge_Session_Finished: State(8b)
+#define EVCC_CTRL_STATUS    0x68009u  // Advantics_Controller_Status: State(8b) — 200ms heartbeat
 //
-// Sent by VCU (VCU → EVCC, 100ms)
-#define EVCC_EV_INFO     0x610u  // State_of_Charge(8b %), Energy_Capacity(16b kWh×0.1)
-#define EVCC_DC_STATUS1  0x612u  // Max_Charge_Current(16b s A), Present_Current(16b s A), Max_Discharge_Current(16b A), Target_Voltage(16b V)
-#define EVCC_DC_STATUS2  0x613u  // Contactors_Closed(1b), Normal_End_of_Charge(1b), Emergency_Stop(1b), Battery_Voltage(16b V×0.1), Inlet_Voltage(16b V×0.1)
+// Sent by VCU (VCU → EVCC, extended IDs, every 62.5ms)
+#define EVCC_PWR_STATUS     0x60010u  // Power_Modules_Status: Present_V(16b 0.1V LE), Present_I(16b s 0.1A LE), Reserved(16b), System_Enable(8b), Insulation_R(8b 2kΩ/bit)
+#define EVCC_PWR_LIMITS     0x60011u  // Power_Modules_Limits: Max_V(16b 0.1V LE), Max_I(16b s 0.1A LE), Reserved(32b)
+#define EVCC_SEQ_CTRL       0x60012u  // Sequence_Control: Start_Auth(b0), CHAdeMO_Btn(b1) | CCS_Done(b0), CCS_Valid(b1), Params_Done(b2) | User_Stop(b0)
 //
-// Pack parameters — TODO: calibrate for actual cell chemistry and pack configuration
-#define EVCC_PACK_ENERGY_X10  400   // energy capacity × 10 in kWh (e.g. 400 = 40.0 kWh)
-#define EVCC_MAX_CHARGE_A     100   // BMS maximum charge current limit (A)
-#define EVCC_TARGET_V         400   // full-charge target pack voltage (V)
+// Plug_and_pins values (New_Charge_Session byte 1)
+#define EVCC_PLUG_CCS_DC_CORE  0u  // CCS DC Core (DIN 70121 / ISO 15118 basic)
+#define EVCC_PLUG_CCS_DC_EXT   1u  // CCS DC Extended
+#define EVCC_PLUG_CHADEMO      2u  // CHAdeMO
+//
+// Battery charge limits — TODO: calibrate for actual pack configuration
+#define EVCC_MAX_VOLTAGE_x10  4200u  // 420.0 V pack maximum (0.1V units)
+#define EVCC_MAX_CURRENT_x10  1000u  // 100.0 A maximum charge current (0.1A units)
 // pMBB32 cell voltage thresholds (16-bit ADC, 5 V ref → 1 count ≈ 76.3 µV)
-#define EVCC_CELL_V_EMPTY  39322u   // ≈ 3.0 V — 0 % SoC reference   (TODO: calibrate for cell chemistry)
-#define EVCC_CELL_V_FULL   47841u   // ≈ 3.65 V — 100 % / end-of-charge (TODO: calibrate)
+#define EVCC_CELL_V_EMPTY  39322u  // ≈ 3.0 V — 0 % SoC reference (TODO: calibrate for cell chemistry)
+#define EVCC_CELL_V_FULL   47841u  // ≈ 3.65 V — 100 % SoC (TODO: calibrate)
 //
-uint8_t  EVCCstage            = 0;     // Communication_Stage byte from 0x600
-bool     EVCCcontactorsClosed = false; // true when both DC contactor feedbacks closed (0x604)
-bool     EVCCfaultActive      = false; // true when any diagnostic flag is set (0x605)
-bool     normalEndOfCharge    = false; // set when highestCellV ≥ EVCC_CELL_V_FULL
-bool     emergencyStop        = false; // set on critical BMS fault during DCFC
+uint8_t  EVCCstage          = 0;     // Advantics_Controller_Status.State from 0x68009
+uint8_t  EVCCplugType       = 0;     // Plug_and_pins from New_Charge_Session
+bool     EVCCsessionActive  = false; // true from New_Charge_Session until Finished/Emergency
+bool     EVCCemergencyStop  = false; // set on Emergency_Stop received
+bool     EVCCsystemEnable   = false; // VCU authorisation flag → drives System_Enable in Power_Modules_Status
+bool     normalEndOfCharge  = false; // set when highestCellV ≥ EVCC_CELL_V_FULL
 
 uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
 uint16_t rpm = 0;
@@ -326,7 +342,7 @@ bool     brakePedal           = false;// true when brake pedal is pressed
 bool     regenActive          = false;// true when LDU torque is negative and motor is spinning
 bool     IVTfaultActive       = false;// set in can2Sniff on overcurrent / overvoltage
 uint32_t preChargeStartTime   = 0;   // millis() when PreCharge state was entered
-bool     chargeMode           = false;// true when pre-charge was triggered by EVCC, not KL15
+bool     chargeMode           = false;// true for AC charge session — routes pre-charge to Charge state (TODO: set from EVCC_NEW_SESSION when AC plug type detected)
 bool     reducedPowerActive   = false;// true when BMS temp fault limits available power
 uint16_t groundSpeed = 0;
 uint32_t GPSaltitude = 0;

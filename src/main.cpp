@@ -139,56 +139,62 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
   if (VCUstate != VCU_STATE_FAULT)//(VCUstate != VCU_STATE_OFF && VCUstate != VCU_STATE_FAULT)
     displayStatus(); // update RealDash
 
-  // Advantics ADM-CS-EVCC: send battery status every 62.5ms (within 100ms requirement)
+  // Advantics ADM-CS-EVCC Generic Power Modules protocol — send every 62.5ms
   {
-    // SoC from highest cell voltage — linear approximation, TODO: calibrate endpoints
-    uint8_t soc = 0;
-    if (highestCellV >= EVCC_CELL_V_EMPTY)
-      soc = (uint8_t)constrain(map((long)highestCellV,
-              (long)EVCC_CELL_V_EMPTY, (long)EVCC_CELL_V_FULL, 0L, 100L), 0L, 100L);
     normalEndOfCharge = (highestCellV > 0u) && (highestCellV >= EVCC_CELL_V_FULL);
 
-    msg2.flags.extended = 0;
-
-    // 0x610: EV_Information — SoC (%) and energy capacity (kWh × 0.1)
-    msg2.id     = EVCC_EV_INFO;
-    msg2.len    = 3;
-    msg2.buf[0] = soc;
-    msg2.buf[1] = (uint8_t)( EVCC_PACK_ENERGY_X10        & 0xFF);
-    msg2.buf[2] = (uint8_t)((EVCC_PACK_ENERGY_X10 >> 8)  & 0xFF);
-    can2.write(msg2);
-
-    // 0x612: DC_Status1 — current and voltage limits/measurements
-    int16_t maxChgA  = normalEndOfCharge ? 0 : (int16_t)EVCC_MAX_CHARGE_A;
-    int16_t presentA = (int16_t)((int32_t)IVTpackCurrent / 1000);  // mA → A
-    msg2.id     = EVCC_DC_STATUS1;
-    msg2.len    = 8;
-    msg2.buf[0] = (uint8_t)( maxChgA        & 0xFF);
-    msg2.buf[1] = (uint8_t)((maxChgA  >> 8) & 0xFF);
-    msg2.buf[2] = (uint8_t)( presentA       & 0xFF);
-    msg2.buf[3] = (uint8_t)((presentA >> 8) & 0xFF);
-    msg2.buf[4] = 0;  // Max_Discharge_Current = 0 (not bidirectional)
+    // 0x60010 Power_Modules_Status: Present_V (LE uint16, 0.1V), Present_I (LE int16, 0.1A),
+    //   Reserved (16b), System_Enable (8b 0/1), Insulation_R (8b, 2kΩ/bit from SIM100MOD Rp)
+    uint16_t presentV = (uint16_t)(IVTpackVoltage / 100u);        // mV → 0.1V
+    int16_t  presentA = (int16_t)(IVTpackCurrent / 100);           // mA → 0.1A
+    uint8_t  insRes   = (SIM100MODRpKohms > 510u) ? 255u : (uint8_t)(SIM100MODRpKohms / 2u);
+    msg2.flags.extended = 1;
+    msg2.id   = EVCC_PWR_STATUS;
+    msg2.len  = 8;
+    msg2.buf[0] = presentV & 0xFF;
+    msg2.buf[1] = (presentV >> 8) & 0xFF;
+    msg2.buf[2] = (uint8_t)(presentA & 0xFF);
+    msg2.buf[3] = (uint8_t)((uint16_t)presentA >> 8);
+    msg2.buf[4] = 0;
     msg2.buf[5] = 0;
-    msg2.buf[6] = (uint8_t)( EVCC_TARGET_V       & 0xFF);
-    msg2.buf[7] = (uint8_t)((EVCC_TARGET_V >> 8) & 0xFF);
+    msg2.buf[6] = EVCCsystemEnable ? 1u : 0u;
+    msg2.buf[7] = insRes;
     can2.write(msg2);
 
-    // 0x613: DC_Status2 — status flags + Battery_Voltage + Inlet_Voltage (both in 0.1 V)
-    // IVT-MOD: U1=Pack+, U2=DC-Link+, U3=DCFC+ → IVTvoltage3 is the DCFC inlet voltage
-    uint16_t batV_x10   = (uint16_t)(IVTpackVoltage / 100u);  // mV → 0.1 V
-    uint16_t inletV_x10 = (uint16_t)(IVTvoltage3    / 100u);  // mV → 0.1 V
-    msg2.id     = EVCC_DC_STATUS2;
-    msg2.len    = 5;
-    msg2.buf[0] = (EVCCcontactorsClosed ? 0x01u : 0x00u)
-                | (normalEndOfCharge    ? 0x02u : 0x00u)
-                | (emergencyStop        ? 0x04u : 0x00u);
-    msg2.buf[1] = (uint8_t)( batV_x10        & 0xFF);
-    msg2.buf[2] = (uint8_t)((batV_x10  >> 8) & 0xFF);
-    msg2.buf[3] = (uint8_t)( inletV_x10      & 0xFF);
-    msg2.buf[4] = (uint8_t)((inletV_x10 >> 8) & 0xFF);
+    // 0x60011 Power_Modules_Limits: Max_Voltage (LE uint16, 0.1V), Max_Current (LE int16, 0.1A)
+    msg2.id  = EVCC_PWR_LIMITS;
+    msg2.len = 8;
+    msg2.buf[0] = EVCC_MAX_VOLTAGE_x10 & 0xFF;
+    msg2.buf[1] = (EVCC_MAX_VOLTAGE_x10 >> 8) & 0xFF;
+    msg2.buf[2] = EVCC_MAX_CURRENT_x10 & 0xFF;
+    msg2.buf[3] = (EVCC_MAX_CURRENT_x10 >> 8) & 0xFF;
+    msg2.buf[4] = 0;
+    msg2.buf[5] = 0;
+    msg2.buf[6] = 0;
+    msg2.buf[7] = 0;
+    can2.write(msg2);
+
+    // 0x60012 Sequence_Control (3 bytes):
+    //   byte 0: b0=Start_Charge_Authorisation, b1=CHAdeMO_Start_Button
+    //   byte 1: b0=CCS_Authorisation_Done, b1=CCS_Authorisation_Valid, b2=Charge_Parameters_Done
+    //   byte 2: b0=User_Stop_Button (asserted when battery is full)
+    bool chademoBtn = EVCCsystemEnable && (EVCCplugType == EVCC_PLUG_CHADEMO);
+    msg2.id  = EVCC_SEQ_CTRL;
+    msg2.len = 3;
+    msg2.buf[0] = (EVCCsystemEnable ? 0x01u : 0x00u)  // Start_Charge_Authorisation
+               | (chademoBtn       ? 0x02u : 0x00u);  // CHAdeMO_Start_Button
+    msg2.buf[1] = EVCCsystemEnable ? 0x07u : 0x00u;   // CCS_Done | CCS_Valid | Params_Done
+    msg2.buf[2] = normalEndOfCharge ? 0x01u : 0x00u;  // User_Stop_Button
     can2.write(msg2);
   }
 }//end of callback_cells_pdu()
+
+// Ghost SA flag: set by can1Sniff ISR when frames arrive with modNum > 3.
+// Indicates one module's TOTAL_ICS was corrupted during init — it broadcasts on SA+0..SA+7.
+// SA=1..3 frames still arrive so stale counters never trip, but cell data is garbage.
+static volatile bool     pMBB32ghostSA   = false;
+// Bitmask of frame types (ft=01..0C → bits 0..11) seen per module since last check.
+static volatile uint16_t pMBB32ftSeen[3] = {0, 0, 0};
 
 /* t2 Callback
 * This runs every t2 period (200ms).
@@ -237,45 +243,97 @@ void callback_t2() {
   }
 #endif
 
-  // Stale recovery: per-module shutdown→wake, escalating to PDU CH2 power cycle.
-  {
+  // Stale recovery: shutdown → 2 s → wake, escalating to PDU CH2 power cycle after 3 retries.
+  // Skip for the first 10 s to allow modules time to boot after PDU-8 enables their 12V rail.
+  static uint8_t startupGrace = 50; // 50 × 200 ms = 10 s
+  if (startupGrace > 0) {
+    if (--startupGrace == 0) {
+      pMBB32stale1 = pMBB32stale2 = pMBB32stale3 = 0;
+    }
+  }
+  if (startupGrace == 0) {
     static struct {
       uint8_t  *stale;
       uint32_t  id;
       uint8_t   num;
-      uint8_t   phase;       // 0=idle, 1=awaiting 2s after shutdown
+      uint8_t   phase;      // 0=idle, 1=awaiting 2s after shutdown
       uint32_t  phaseTime;
-      uint8_t   retryCount;  // failed wake attempts before escalating
+      uint8_t   retryCount;
     } mods[] = {
       {&pMBB32stale1, 0xAF0100, 1, 0, 0, 0},
       {&pMBB32stale2, 0xAF0200, 2, 0, 0, 0},
       {&pMBB32stale3, 0xAF0300, 3, 0, 0, 0},
     };
 
-    // CH2 power cycle — state 0=idle, 1=CH2 off (1s), 2=CH2 on (2s boot wait)
+    // CH2 power cycle — state 0=idle, 1=CH2 off (1s), 2=CH2 on (3s boot wait)
     static struct { uint8_t state; uint32_t t; } ch2 = {0, 0};
 
     msg1.flags.extended = 1;
 
+    // Ghost SA detection with 2 s debounce: TOTAL_ICS corruption makes one module broadcast on
+    // SA+0..SA+7. Require sustained detection before cycling CH2 — a single transient frame
+    // (e.g. residual bus traffic during boot wait) must not trigger a power cycle.
+    {
+      static uint32_t ghostSince = 0;
+      noInterrupts(); bool ghostNow = pMBB32ghostSA; pMBB32ghostSA = false; interrupts();
+      if (ghostNow) {
+        if (ghostSince == 0) ghostSince = millis();
+      } else {
+        ghostSince = 0;
+      }
+      if (ghostSince && ch2.state == 0 && millis() - ghostSince >= 2000) {
+        ghostSince = 0;
+        noInterrupts(); pMBB32ftSeen[0] = pMBB32ftSeen[1] = pMBB32ftSeen[2] = 0; interrupts();
+        Serial.println("pMBB32: ghost SA detected (TOTAL_ICS corruption) — cycling PDU CH2");
+        PDUmsg1.buf[1] = 0;
+        ch2.state = 1; ch2.t = millis();
+        for (auto &mm : mods) { *mm.stale = 0; mm.phase = 0; mm.retryCount = 0; }
+      }
+    }
+
+    // Incomplete frame-set detection: numChannels corruption suppresses ft=03/04/09/0A
+    // (cells 9-16). The module still sends ft=01/02 so stale counters reset normally, making
+    // the corruption silent. Detect by checking whether ft=01 arrived but ft=03 did not over
+    // a 5 s window, then force the stale counter so recovery sends shutdown→wake.
+    static uint32_t nextFtCheck = 0;
+    if (ch2.state == 0 && millis() >= nextFtCheck) {
+      nextFtCheck = millis() + 5000;
+      noInterrupts();
+      uint16_t snap[3] = {pMBB32ftSeen[0], pMBB32ftSeen[1], pMBB32ftSeen[2]};
+      pMBB32ftSeen[0] = pMBB32ftSeen[1] = pMBB32ftSeen[2] = 0;
+      interrupts();
+      for (uint8_t i = 0; i < 3; i++) {
+        bool seenFt01 = snap[i] & (1u << 0);  // module is live
+        bool seenFt03 = snap[i] & (1u << 2);  // cells 9-12 present
+        if (seenFt01 && !seenFt03) {
+          Serial.printf("pMBB32 #%u: ft=03 absent (numChannels corrupted, seen=0x%03X)"
+                        " — forcing recovery\n", i + 1, (unsigned)snap[i]);
+          uint8_t *s = (i == 0 ? &pMBB32stale1 : i == 1 ? &pMBB32stale2 : &pMBB32stale3);
+          *s = 255;
+          nextFtCheck = millis() + 30000;  // 30 s gap; recovery takes 2-4 s + module boot
+          break;
+        }
+      }
+    }
+
     if (ch2.state == 1 && millis() - ch2.t >= 1000) {
       Serial.println("PDU CH2 restored — waiting for pMBB32 boot");
-      PDUmsg1.buf[1] = 0x05;         // t1 picks this up and keeps CH2 live
-      ch2.state = 2;
-      ch2.t = millis();
-    } else if (ch2.state == 2 && millis() - ch2.t >= 3000) {
+      PDUmsg1.buf[1] = 0x05;
+      ch2.state = 2; ch2.t = millis();
+    } else if (ch2.state == 2 && millis() - ch2.t >= 1000) {
       Serial.println("pMBB32 power cycle complete — waking all modules");
       for (auto &m : mods) {
         msg1.id = m.id; msg1.len = 3;
         msg1.buf[0] = wakeup; msg1.buf[1] = channelCount16; msg1.buf[2] = numberOfDevices;
         can1.write(msg1);
       }
-      for (auto &m : mods) {
-        msg1.id = m.id; msg1.len = 1;
-        msg1.buf[0] = contReportingEnable;
-        can1.write(msg1);
-      }
-      msg1.id = 0xFF0000; msg1.len = 0; can1.write(msg1);
-      for (auto &m : mods) { *m.stale = 0; m.phase = 0; m.retryCount = 0; }
+      pMBB32stale1 = pMBB32stale2 = pMBB32stale3 = 0;
+      noInterrupts();
+      pMBB32ghostSA = false;  // discard any frames seen during the boot wait
+      pMBB32ftSeen[0] = pMBB32ftSeen[1] = pMBB32ftSeen[2] = 0;
+      interrupts();
+      nextFtCheck = millis() + 10000;  // give modules 10 s to boot before checking ft=03
+      for (auto &m : mods) { m.phase = 0; m.retryCount = 0; }
       ch2.state = 0;
     }
 
@@ -285,7 +343,7 @@ void callback_t2() {
         if (m.phase == 0 && *m.stale > 5) {
           if (m.retryCount >= 3) {
             Serial.printf("pMBB32 #%u exhausted retries — cycling PDU CH2\n", m.num);
-            PDUmsg1.buf[1] = 0;      // t1 keeps CH2 off every 62.5ms until restored
+            PDUmsg1.buf[1] = 0;
             ch2.state = 1; ch2.t = millis();
             for (auto &mm : mods) { *mm.stale = 0; mm.phase = 0; mm.retryCount = 0; }
             break;
@@ -295,12 +353,11 @@ void callback_t2() {
           msg1.id = m.id; msg1.len = 1; msg1.buf[0] = shutdown;
           can1.write(msg1);
           m.phase = 1; m.phaseTime = millis();
-        } else if (m.phase == 1 && millis() - m.phaseTime >= 2000) {
-          Serial.printf("pMBB32 #%u — sending wake + contReportingEnable\n", m.num);
+        } else if (m.phase == 1 && millis() - m.phaseTime >= 500) {
+          Serial.printf("pMBB32 #%u — sending wake\n", m.num);
           msg1.id = m.id; msg1.len = 3;
           msg1.buf[0] = wakeup; msg1.buf[1] = channelCount16; msg1.buf[2] = numberOfDevices;
           can1.write(msg1);
-          msg1.len = 1; msg1.buf[0] = contReportingEnable; can1.write(msg1);
           *m.stale = 0; m.retryCount++; m.phase = 0; anyWoke = true;
         }
       }
@@ -336,21 +393,33 @@ void callback_t2() {
 
   linReadValve();//poll BMW changeover valve over LIN (Serial3)
 
-  // EMP WP29 pump command — must be sent ≥ 1 Hz; t2 fires every 200 ms.
-  // Percent Speed Command: byte 3 = setpoint% × 2 (0.5 %/bit).
-  // Unused Motor Speed Command bytes set to 0xFF per spec.
+  // EMP WP29 inverter cooling pump (CAN2) — must be sent ≥ 1 Hz; t2 fires every 200 ms.
   msg2.id             = EMP_WP29_CMD_ID;
   msg2.flags.extended = 1;
   msg2.len            = 8;
-  msg2.buf[0]         = (pumpSetpoint > 0) ? 0xFD : 0xFC;  // Motor On (fwd) or Off
-  msg2.buf[1]         = 0xFF;  // Motor Speed Command unused (using Percent)
+  msg2.buf[0]         = (invPumpSetpoint > 0) ? 0xFD : 0xFC;
+  msg2.buf[1]         = 0xFF;
   msg2.buf[2]         = 0xFF;
-  msg2.buf[3]         = (uint8_t)(pumpSetpoint * 2);        // 0.5 %/bit
+  msg2.buf[3]         = (uint8_t)(invPumpSetpoint * 2);
   msg2.buf[4]         = 0xFF;
   msg2.buf[5]         = 0xFF;
   msg2.buf[6]         = 0xFF;
   msg2.buf[7]         = 0xFF;
   can2.write(msg2);
+
+  // EMP WP29 battery cooling pump (CAN1) — same protocol, separate bus
+  msg1.id             = EMP_WP29_CMD_ID;
+  msg1.flags.extended = 1;
+  msg1.len            = 8;
+  msg1.buf[0]         = (battPumpSetpoint > 0) ? 0xFD : 0xFC;
+  msg1.buf[1]         = 0xFF;
+  msg1.buf[2]         = 0xFF;
+  msg1.buf[3]         = (uint8_t)(battPumpSetpoint * 2);
+  msg1.buf[4]         = 0xFF;
+  msg1.buf[5]         = 0xFF;
+  msg1.buf[6]         = 0xFF;
+  msg1.buf[7]         = 0xFF;
+  can1.write(msg1);
 
 }//end of callback_t2()
 
@@ -363,6 +432,9 @@ void callback_t3() {
   //groundSpeed = myGNSS.getGroundSpeed() * 0.00223694;//convert mm/s to mph
   //GPSaltitude = myGNSS.getAltitudeMSL() / 3300;//feet
   digitalToggleFast(LED_BUILTIN);
+  Serial.printf("pMBB32 stale=%u/%u/%u  lo=%u hi=%u mV\n",
+                pMBB32stale1, pMBB32stale2, pMBB32stale3,
+                lowestCellV, highestCellV);
 }//end of callback1000ms()
 
 /* CAN1 Receiver
@@ -470,19 +542,32 @@ void can1Sniff(const CAN_message_t &msg) {
     } */
   }//end 0x18FF0Eyy receiver
 
-  // Reset stale counter when a cell voltage broadcast is received (0x18FF01yy–0x18FF0Cyy).
-  // Min/max frames (0x18FF0Eyy) do NOT reset stale — they are explicitly polled and arrive
-  // even when the 0xFF0000 trigger is missed. Stale only clears when the module is actually
-  // broadcasting measurement data, which is what the recovery logic is meant to restore.
+  // Track pMBB32 cell/temp frames: reset stale, record frame-type coverage, detect ghost SAs.
+  //
+  // When a module's TOTAL_ICS or numChannels variable is corrupted during init (by a PDU-8
+  // status frame arriving in the pMBB32 wake handler's ~8ms init window), two failure modes
+  // occur:
+  //
+  //   TOTAL_ICS wrong (e.g. 16): module broadcasts on SA+0..SA+7. SA=1..3 frames still
+  //   arrive, so stale counters never trip, but data is garbage and bus is flooded with
+  //   96 frames per trigger. These show up as modNum=4..8 "ghost" frames.
+  //
+  //   numChannels wrong (e.g. 0): ft=03/04/09/0A (cells 9-16) are suppressed because the
+  //   firmware gates them on (numChannels > 8). ft=01/02 still arrive, stale counters still
+  //   reset, but cell data for cells 9-32 is absent and undetected.
   {
-    uint8_t frameType = (msg.id >> 8) & 0xFF;
-    uint8_t modNum    = msg.id & 0xFF;
-    if ((msg.id >> 16) == 0x18FF && frameType >= 0x01 && frameType <= 0x0C) {
-      switch (modNum) {
-        case 1: pMBB32stale1 = 0; break;
-        case 2: pMBB32stale2 = 0; break;
-        case 3: pMBB32stale3 = 0; break;
-        default: break;
+    uint8_t ft  = (msg.id >> 8) & 0xFF;
+    uint8_t mod = msg.id & 0xFF;
+    if ((msg.id >> 16) == 0x18FF && ft >= 0x01 && ft <= 0x0C) {
+      if (mod >= 1 && mod <= 3) {
+        pMBB32ftSeen[mod - 1] |= (1u << (ft - 1));
+        switch (mod) {
+          case 1: pMBB32stale1 = 0; break;
+          case 2: pMBB32stale2 = 0; break;
+          case 3: pMBB32stale3 = 0; break;
+        }
+      } else if (mod >= 4) {
+        pMBB32ghostSA = true;
       }
     }
   }
@@ -497,13 +582,24 @@ void can1Sniff(const CAN_message_t &msg) {
   }
 #endif
 
+  // EMP WP29 battery cooling pump (CAN1) — same protocol as inverter pump on CAN2
+  switch (msg.id) {
+    case EMP_WP29_STATUS1:
+      battPumpStatus = (msg.buf[0] >> 2) & 0x0F;
+      battPumpSpeed  = ((uint16_t)msg.buf[2] << 8) | msg.buf[1];
+      battPumpFaults = msg.buf[7] & 0x0F;
+      break;
+    case EMP_WP29_STATUS3:
+      break;
+  }
+
   digitalWriteFast(4, LOW);
 }// end of can1Sniff(const CAN_message_t &msg)
 
 /* CAN2 Receiver
 * This function processes messages received on CAN2.
 * 
-* The IVT-MOD is configured by us for the following broadcast rates:
+* The IVT-S-1K-U3-I-CAN1-12V is configured for the following broadcast rates:
 *   0x621: Current - 20ms
 *   0x622: Pack+(U1) - 60ms
 *   0x623: Pre-charge+(U2) - 60ms
@@ -520,7 +616,7 @@ void can1Sniff(const CAN_message_t &msg) {
 void can2Sniff(const CAN_message_t &msg) {
   digitalWriteFast(5, HIGH);
   switch (msg.id) {  
-    case 0x621://IVT-MOD Current Sensor
+    case 0x621://IVT-S Current
       IVTpackCurrent = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
     case 0x622:
@@ -648,11 +744,11 @@ void can2Sniff(const CAN_message_t &msg) {
      */
     case EMP_WP29_STATUS1:
       // byte 0: bits[1:0]=direction, bits[5:2]=controller_status, bits[7:6]=command_src
-      pumpStatus      = (msg.buf[0] >> 2) & 0x0F;
+      invPumpStatus = (msg.buf[0] >> 2) & 0x0F;
       // bytes 1-2: measured speed, little-endian uint16, 0.5 rpm/bit
-      pumpActualSpeed = ((uint16_t)msg.buf[2] << 8) | msg.buf[1];
+      invPumpSpeed  = ((uint16_t)msg.buf[2] << 8) | msg.buf[1];
       // byte 7: bits[1:0]=service_indicator, bits[3:2]=operation_status
-      pumpFaults      = msg.buf[7] & 0x0F;
+      invPumpFaults = msg.buf[7] & 0x0F;
       break;
     case EMP_WP29_STATUS3:
       // bytes 0-1: motor voltage (little-endian, 0.05 V/bit)
@@ -660,25 +756,42 @@ void can2Sniff(const CAN_message_t &msg) {
       // byte 4 bit 0: HVIL status (0=OK, 1=open)
       break;
 
-    /* Advantics ADM-CS-EVCC DC Fast Charge Controller -------------------
-     * EVCC drives DCFC contactors via its own hardware; VCU monitors state.
-     * DCFC inlet wired directly to battery pack, independent of PDU-8.
-     * Byte layouts per Advantics Generic PEV protocol v2.x (little-endian).
+    /* Advantics ADM-CS-EVCC Generic Power Modules protocol ---------------
+     * EVCC drives DCFC contactors autonomously; VCU provides measurements,
+     * limits, and authorisation. All IDs are 29-bit extended.
      */
-    case EVCC_EVSE_INFO:
-      EVCCstage = msg.buf[0];
-      // buf[1]=Protocol, buf[2]=Pins, buf[3:4]=Max_Current (s16, A) — not consumed yet
+    case EVCC_NEW_SESSION:  // 0x68001 — plug detected, EVSE parameters
+      EVCCplugType      = msg.buf[1]; // 0=CCS_DC_Core, 1=CCS_DC_Extended, 2=CHAdeMO
+      EVCCsessionActive = true;
+      EVCCsystemEnable  = true;
+      EVCCemergencyStop = false;
+      // TODO: DCFC bypasses main contactors entirely (EVCC handles its own).
+      //       AC session (plug type TBD) needs chargeMode=true + fsm.trigger(KL15_ON)
+      //       to run pre-charge through PDU-8 before enabling System_Enable.
+      // buf[0]=Communication_Protocol, buf[2:3]=EV_Max_V (0.1V LE),
+      // buf[4:5]=EV_Max_I (0.1A LE), buf[6]=Battery_Capacity (2kWh/bit), buf[7]=SoC (%)
       break;
-    case EVCC_DC_CONTROL:
-      // buf[0] bit 0 = Close_Contactors; EVCC drives hardware directly, VCU monitors only
+    case EVCC_CHARGING_LOOP:  // 0x68005 — active charge targets from EVSE
+      // buf[0:1]=Target_Voltage (0.1V LE), buf[2:3]=Target_Current (0.1A s LE), buf[4]=SoC
+      // EVCC forwards these targets to the EVSE; VCU monitors only
       break;
-    case EVCC_HW_STATUS:
-      // bit 0 = DC_Contactor_Positive_Feedback, bit 1 = DC_Contactor_Negative_Feedback
-      EVCCcontactorsClosed = (msg.buf[0] & 0x03) == 0x03;
+    case EVCC_EMERG_STOP:  // 0x68006 — emergency condition from EVSE or EVCC
+      EVCCemergencyStop = true;
+      EVCCsessionActive = false;
+      EVCCsystemEnable  = false;
+      // TODO: fsm.trigger(FAULT_EV) when charge FSM states are split
       break;
-    case EVCC_DIAG_STATUS:
-      // 26 diagnostic flags packed into bytes 0–3 (bit 25 = msb of byte 3 bit 1)
-      EVCCfaultActive = msg.buf[0] || msg.buf[1] || msg.buf[2] || (msg.buf[3] & 0x03);
+    case EVCC_SESSION_END:  // 0x68007 — charge session finished normally
+      EVCCsessionActive = false;
+      EVCCsystemEnable  = false;
+      // TODO: fsm.trigger(CHARGE_OFF) when charge FSM states are split
+      break;
+    case EVCC_CTRL_STATUS:  // 0x68009 — EVCC heartbeat (200ms timeout)
+      EVCCstage = msg.buf[0]; // 0=Booting … 8=Charging … 10=Finished
+      break;
+    case EVCC_INS_TEST:     // 0x68002 — insulation test in progress
+    case EVCC_PRECHARGE:    // 0x68003 — precharge in progress
+    case EVCC_STATUS_CHANGE: // 0x68004 — charge status change notification
       break;
 
   }
@@ -793,31 +906,19 @@ void wakepMBB32(){
 
   static const uint32_t modIds[] = {0xAF0100, 0xAF0200, 0xAF0300};
 
-  // Step 1: wake each module
   for (uint8_t i = 0; i < 3; i++) {
     msg1.id = modIds[i];
     msg1.len = 3;
-    msg1.buf[0] = wakeup;         // 0x01
-    msg1.buf[1] = channelCount16; // 0x10: 16-cell module
+    msg1.buf[0] = wakeup;           // 0x01
+    msg1.buf[1] = channelCount16;   // 0x10: 16-cell module
     msg1.buf[2] = numberOfDevices;  // 0x02
     can1.write(msg1);
     delay(10);
   }
 
-  // Step 2: enable continuous cell voltage reporting on each module (1-byte command)
-  for (uint8_t i = 0; i < 3; i++) {
-    msg1.id = modIds[i];
-    msg1.len = 1;
-    msg1.buf[0] = contReportingEnable; // 0x10
-    can1.write(msg1);
-    delay(10);
-  }
-
-  // Step 3: trigger first measurement cycle
   msg1.id = 0xFF0000;
   msg1.len = 0;
   can1.write(msg1);
-  delay(1);
 }
 
 void shutdownpMBB32() {
@@ -1265,7 +1366,7 @@ void check_Fault() {
 void HeatPack_enter() {
   Serial.println("Entering HeatPack state");
   VCUstate = VCU_STATE_HEAT_PACK;
-  // TODO: set pumpSetpoint and send to WP29; enable heater output
+  // TODO: set invPumpSetpoint/battPumpSetpoint; enable heater output
 }
 
 void HeatPack_exit() {
@@ -1281,7 +1382,7 @@ void check_HeatPack() {
 void CoolPack_enter() {
   Serial.println("Entering CoolPack state");
   VCUstate = VCU_STATE_COOL_PACK;
-  // TODO: set pumpSetpoint and send to WP29; enable AC exchanger
+  // TODO: set invPumpSetpoint/battPumpSetpoint; enable AC exchanger
 }
 
 void CoolPack_exit() {
@@ -1307,7 +1408,7 @@ void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 extern "C" uint32_t set_arm_clock(uint32_t frequency); // clockspeed.c
 
 void enterSleep() {
-  if (EVCCstage > 0) return;  // active EVCC session — stay awake
+  if (EVCCsessionActive) return;  // active EVCC charge session — stay awake
 
   Serial.println("KLR off — sleeping");
   Serial.flush();
@@ -1535,6 +1636,7 @@ void setup() {
   PDUmsg1.buf[5] = 0;
   PDUmsg1.buf[6] = 0;
   PDUmsg1.buf[7] = 0;
+  uint32_t ch2OnAt = millis(); // used below to guarantee pMBB32 boot time
   can1.write(PDUmsg1);
 
   PDUmsg2.id = 0x0A0630;
@@ -1586,7 +1688,13 @@ void setup() {
     ads.startADCReading(ADS1X15_REG_CONFIG_MUX_SINGLE_0, false); // start first read
   }
 
-  delay(100);
+  // Guarantee at least 500 ms since PDU-8 CH2 was enabled before waking pMBB32.
+  // The dsPIC33 boots in <50 ms; 500 ms gives comfortable margin for the PL455
+  // wake sequence and daisy-chain reset before AutoAddress runs.
+  {
+    uint32_t elapsed = millis() - ch2OnAt;
+    if (elapsed < 500) delay(500 - elapsed);
+  }
   wakepMBB32();
 
   t2.begin(callback_t2, t2CallbackRate);
@@ -1664,12 +1772,12 @@ void setup() {
    * Send Motor Off command at startup; periodic commands via callback_t2().
    * EMP proprietary protocol — 9980001068 Rev. N
    */
-  pumpSetpoint        = 0;
+  invPumpSetpoint     = 0;
   msg2.id             = EMP_WP29_CMD_ID;
   msg2.flags.extended = 1;
   msg2.len            = 8;
   msg2.buf[0]         = 0xFC;  // Motor Off + Don't Care power hold
-  msg2.buf[1]         = 0xFF;  // Motor Speed Command unused (using Percent)
+  msg2.buf[1]         = 0xFF;
   msg2.buf[2]         = 0xFF;
   msg2.buf[3]         = 0x00;  // 0 % speed
   msg2.buf[4]         = 0xFF;
@@ -1677,6 +1785,21 @@ void setup() {
   msg2.buf[6]         = 0xFF;
   msg2.buf[7]         = 0xFF;
   can2.write(msg2);
+  delay(1);
+
+  battPumpSetpoint    = 0;
+  msg1.id             = EMP_WP29_CMD_ID;
+  msg1.flags.extended = 1;
+  msg1.len            = 8;
+  msg1.buf[0]         = 0xFC;
+  msg1.buf[1]         = 0xFF;
+  msg1.buf[2]         = 0xFF;
+  msg1.buf[3]         = 0x00;
+  msg1.buf[4]         = 0xFF;
+  msg1.buf[5]         = 0xFF;
+  msg1.buf[6]         = 0xFF;
+  msg1.buf[7]         = 0xFF;
+  can1.write(msg1);
   delay(1);
 
 /*
@@ -1826,9 +1949,9 @@ void loop() {
 
   // KLR gone low (key off) while system is safe → hibernate.
   // Debounce: only sleep after KLR has been continuously LOW for 500ms.
-  // Gives the EVCC (100ms broadcast) 5 periods to set EVCCstage after a CAN2 wake
+  // Gives the EVCC time to send New_Charge_Session (0x68001) after a CAN2 wake
   // before sleep is re-entered. Normal key-off behaviour is unchanged.
-  // enterSleep() returns immediately if EVCCstage > 0 (active charge session).
+  // enterSleep() returns immediately if EVCCsessionActive (active charge session).
   {
     static uint32_t klrLowSince = 0;
     if (digitalRead(KLR_PIN)) {

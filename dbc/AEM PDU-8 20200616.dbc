@@ -1,0 +1,141 @@
+VERSION ""
+
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: PDU8_1 PDU8_2 AEM_VCU
+
+
+BO_ 2148140560 PDU_MSG_0x000A0610: 8 PDU8_1
+ SG_ PDMErrorStatus01 : 7|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent01 : 1|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus02 : 23|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent02 : 17|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus03 : 39|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent03 : 33|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus04 : 55|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent04 : 49|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+
+BO_ 2148140561 PDU_MSG_0x000A0611: 8 PDU8_1
+ SG_ PDMErrorStatus05 : 7|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent05 : 1|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus06 : 23|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent06 : 17|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus07 : 39|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent07 : 33|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus08 : 55|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent08 : 49|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+
+BO_ 2148140562 PDU2_MSG_0x000A0612: 8 PDU8_2
+ SG_ PDMErrorStatus09 : 7|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent09 : 1|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus10 : 23|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent10 : 17|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus11 : 39|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent11 : 33|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus12 : 55|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent12 : 49|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+
+BO_ 2148140563 PDU2_MSG_0x000A0613: 8 PDU8_2
+ SG_ PDMErrorStatus13 : 7|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent13 : 1|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus14 : 23|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent14 : 17|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus15 : 39|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent15 : 33|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+ SG_ PDMErrorStatus16 : 55|3@0+ (1,0) [0|7] "" Vector__XXX
+ SG_ PDMMeasuredCurrent16 : 49|10@0+ (0.1,0) [0|102.3] "current:A" Vector__XXX
+
+BO_ 2148140576 PDU_MSG_0x000A0620: 8 AEM_VCU
+ SG_ PDMMaxCurrent01 : 7|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent02 : 15|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent03 : 23|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent04 : 31|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent05 : 39|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent06 : 47|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent07 : 55|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent08 : 63|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+
+BO_ 2148140577 PDU2_MSG_0x000A0621: 8 AEM_VCU
+ SG_ PDMMaxCurrent09 : 7|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent10 : 15|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent11 : 23|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent12 : 31|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent13 : 39|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent14 : 47|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent15 : 55|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+ SG_ PDMMaxCurrent16 : 63|8@0+ (0.4,0) [0|102] "current:A" Vector__XXX
+
+BO_ 2148140592 PDU_MSG_0x000A0630: 8 AEM_VCU
+ SG_ PDMDutyOut01 : 7|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut02 : 15|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut03 : 23|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut04 : 31|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut05 : 39|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut06 : 47|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut07 : 55|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut08 : 63|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+
+BO_ 2148140593 PDU2_MSG_0x000A0631: 8 AEM_VCU
+ SG_ PDMDutyOut09 : 7|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut10 : 15|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut11 : 23|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut12 : 31|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut13 : 39|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut14 : 47|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut15 : 55|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+ SG_ PDMDutyOut16 : 63|8@0+ (0.392157,0) [0|100.000035] "fraction:%" Vector__XXX
+
+
+
+BA_DEF_ BO_  "DBC_Author" STRING ;
+BA_DEF_ BO_  "DBC_Author_Contact" STRING ;
+BA_DEF_DEF_  "DBC_Author" "AEM_Performance_Electronics";
+BA_DEF_DEF_  "DBC_Author_Contact" "CANbusInfo@AEMelectronics.com";
+VAL_ 2148140560 PDMErrorStatus01 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140560 PDMErrorStatus02 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140560 PDMErrorStatus03 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140560 PDMErrorStatus04 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140561 PDMErrorStatus05 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140561 PDMErrorStatus06 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140561 PDMErrorStatus07 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140561 PDMErrorStatus08 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140562 PDMErrorStatus09 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140562 PDMErrorStatus10 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140562 PDMErrorStatus11 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140562 PDMErrorStatus12 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140563 PDMErrorStatus13 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140563 PDMErrorStatus14 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140563 PDMErrorStatus15 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+VAL_ 2148140563 PDMErrorStatus16 4 "Short Circuit" 2 "Current Limit Exceeded" 1 "Open Circuit" 0 "OK" ;
+
