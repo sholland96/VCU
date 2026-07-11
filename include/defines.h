@@ -10,7 +10,8 @@ typedef enum {
   VCU_STATE_CHARGE,
   VCU_STATE_HEAT_PACK,
   VCU_STATE_COOL_PACK,
-  VCU_STATE_FAULT
+  VCU_STATE_FAULT,
+  VCU_STATE_KL30C   // external CAN wake (EVCC/gateway) with KL15R low
 } VCUStateEnum;
 
 #define KEYPAD_COLOR_OFF          0
@@ -300,6 +301,13 @@ uint8_t  battPumpSetpoint = 0;
 #define EVCC_PLUG_CCS_DC_CORE  0u  // CCS DC Core (DIN 70121 / ISO 15118 basic)
 #define EVCC_PLUG_CCS_DC_EXT   1u  // CCS DC Extended
 #define EVCC_PLUG_CHADEMO      2u  // CHAdeMO
+// TODO: add AC plug type defines (e.g. Type 1 J1772, Type 2 IEC 62196) when values are confirmed
+// #define EVCC_PLUG_AC_TYPE1  3u
+// #define EVCC_PLUG_AC_TYPE2  4u
+// True for all currently-defined DC plug types; false (AC path) for any future AC value.
+#define EVCC_PLUG_IS_DC(p) ((p) == EVCC_PLUG_CCS_DC_CORE || \
+                            (p) == EVCC_PLUG_CCS_DC_EXT  || \
+                            (p) == EVCC_PLUG_CHADEMO)
 //
 // Battery charge limits — TODO: calibrate for actual pack configuration
 #define EVCC_MAX_VOLTAGE_x10  4200u  // 420.0 V pack maximum (0.1V units)
@@ -436,6 +444,10 @@ void on_trans_PreCharge_Idle();
 void on_trans_PreCharge_Charge();
 void on_trans_PreCharge_Fault();
 void on_trans_Fault_Off();
+void KL30C_enter();
+void check_KL30C();
+void KL30C_exit();
+void enterSleep();
 
 byte buf[8];
 

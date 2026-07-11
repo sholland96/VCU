@@ -25,7 +25,7 @@ CAN_message_t LDUmsg;      // 0x201: pot (bytes 0-1) + canio (byte 4), sent ever
 
 // Used pins
 #define LED_PIN 13
-#define KLR_PIN 2  // physical key position 1 (accessory) — wakes hardware, no FSM role
+#define KL15R_PIN 2  // physical key position 1 (accessory) — wakes hardware, no FSM role
 
 // FSM events — unique integers required by arduino-fsm
 #define KL15_ON          1
@@ -42,6 +42,20 @@ CAN_message_t LDUmsg;      // 0x201: pot (bytes 0-1) + canio (byte 4), sent ever
 #define TEMP_LOW         12
 #define TEMP_HIGH        13
 #define TEMP_OK          14
+#define EXT_WAKE         15  // CAN/EVCC external wake without KL15R
+#define AC_CHARGE_START  16  // AC plug detected in KL30C → close main contactors via PreCharge
+
+#define KL30C_SLEEP_TIMEOUT_MS 60000UL  // sleep after 60 s of inactivity in KL30C
+
+// DMAMEM places sleepMagic in OCRAM (.bss.dma, NOLOAD): valid writable RAM, not zeroed by CRT
+// startup, survives AIRCR reset. Used in enterSleep() and setup() to detect CAN-wake vs key-on.
+DMAMEM volatile uint32_t sleepMagic;
+#define SLEEP_MAGIC_CAN_WAKE 0xC4A8B3E1UL
+
+bool     extWakePending   = false; // set in setup() when CAN wake detected; consumed by FSM
+uint32_t lastExtActivityMs = 0;    // last EVCC heartbeat or gateway frame (for KL30C timeout)
+bool     kl30cKL15Rstate  = false; // tracks KL15R pin state inside KL30C for LED edge detect
+bool     evccIsACSession  = false; // true when plug type is AC → VCU closes main contactors
 
 VCUStateEnum VCUstate = VCU_STATE_OFF;
 State state_Off(&Off_enter, &check_KL15, &Off_exit);
@@ -52,6 +66,7 @@ State state_Charge(&Charge_enter, &check_Charge, &Charge_exit);
 State state_HeatPack(&HeatPack_enter, &check_HeatPack, &HeatPack_exit);
 State state_CoolPack(&CoolPack_enter, &check_CoolPack, &CoolPack_exit);
 State state_Fault(&Fault_enter, &check_Fault, &Fault_exit);
+State state_KL30C(&KL30C_enter, &check_KL30C, &KL30C_exit);
 Fsm fsm(&state_Off);
 
 /* t0 Callback — 10ms LDU fixed safety frame (IntervalTimer / PIT, highest priority)
@@ -244,8 +259,8 @@ void callback_t2() {
 #endif
 
   // Stale recovery: shutdown → 2 s → wake, escalating to PDU CH2 power cycle after 3 retries.
-  // Skip for the first 10 s to allow modules time to boot after PDU-8 enables their 12V rail.
-  static uint8_t startupGrace = 50; // 50 × 200 ms = 10 s
+  // Skip for the first 1 s to allow modules time to boot after PDU-8 enables their 12V rail.
+  static uint8_t startupGrace = 5; // 5 × 200 ms = 1 s
   if (startupGrace > 0) {
     if (--startupGrace == 0) {
       pMBB32stale1 = pMBB32stale2 = pMBB32stale3 = 0;
@@ -761,15 +776,17 @@ void can2Sniff(const CAN_message_t &msg) {
      * limits, and authorisation. All IDs are 29-bit extended.
      */
     case EVCC_NEW_SESSION:  // 0x68001 — plug detected, EVSE parameters
+      // buf[0]=Communication_Protocol, buf[1]=Plug_and_pins, buf[2:3]=EV_Max_V (0.1V LE),
+      // buf[4:5]=EV_Max_I (0.1A LE), buf[6]=Battery_Capacity (2kWh/bit), buf[7]=SoC (%)
       EVCCplugType      = msg.buf[1]; // 0=CCS_DC_Core, 1=CCS_DC_Extended, 2=CHAdeMO
       EVCCsessionActive = true;
       EVCCsystemEnable  = true;
       EVCCemergencyStop = false;
-      // TODO: DCFC bypasses main contactors entirely (EVCC handles its own).
-      //       AC session (plug type TBD) needs chargeMode=true + fsm.trigger(KL15_ON)
-      //       to run pre-charge through PDU-8 before enabling System_Enable.
-      // buf[0]=Communication_Protocol, buf[2:3]=EV_Max_V (0.1V LE),
-      // buf[4:5]=EV_Max_I (0.1A LE), buf[6]=Battery_Capacity (2kWh/bit), buf[7]=SoC (%)
+      evccIsACSession   = !EVCC_PLUG_IS_DC(EVCCplugType); // AC plug → VCU closes main contactors
+      chargeMode        = evccIsACSession; // true routes PreCharge → Charge (not Idle)
+      // DC: EVCC handles its own pre-charge and contactors autonomously; VCU stays in KL30C.
+      // AC: check_KL30C() detects evccIsACSession and fires AC_CHARGE_START → PreCharge → Charge.
+      // TODO: update EVCC_PLUG_IS_DC macro when AC plug type values are confirmed.
       break;
     case EVCC_CHARGING_LOOP:  // 0x68005 — active charge targets from EVSE
       // buf[0:1]=Target_Voltage (0.1V LE), buf[2:3]=Target_Current (0.1A s LE), buf[4]=SoC
@@ -779,15 +796,20 @@ void can2Sniff(const CAN_message_t &msg) {
       EVCCemergencyStop = true;
       EVCCsessionActive = false;
       EVCCsystemEnable  = false;
+      evccIsACSession   = false;
+      chargeMode        = false;
       // TODO: fsm.trigger(FAULT_EV) when charge FSM states are split
       break;
     case EVCC_SESSION_END:  // 0x68007 — charge session finished normally
       EVCCsessionActive = false;
       EVCCsystemEnable  = false;
+      evccIsACSession   = false;
+      chargeMode        = false;
       // TODO: fsm.trigger(CHARGE_OFF) when charge FSM states are split
       break;
     case EVCC_CTRL_STATUS:  // 0x68009 — EVCC heartbeat (200ms timeout)
-      EVCCstage = msg.buf[0]; // 0=Booting … 8=Charging … 10=Finished
+      EVCCstage         = msg.buf[0]; // 0=Booting … 8=Charging … 10=Finished
+      lastExtActivityMs = millis();   // heartbeat resets KL30C inactivity timer
       break;
     case EVCC_INS_TEST:     // 0x68002 — insulation test in progress
     case EVCC_PRECHARGE:    // 0x68003 — precharge in progress
@@ -803,14 +825,13 @@ void can2Sniff(const CAN_message_t &msg) {
 }//end of can2Sniff(const CAN_message_t &msg)
 
 void can3Sniff(const CAN_message_t &msg) {
+  lastExtActivityMs = millis(); // any gateway frame resets KL30C inactivity timer
   switch (msg.id) {
     case 500:
-      //
       break;
     default:
-      Serial.println(" Nothing ");
       break;
-  }  
+  }
 }//end of can3Sniff(const CAN_message_t &msg)
 
 void initCAN (int CAN1baud, int CAN2baud, int CAN3baud) {
@@ -1403,6 +1424,81 @@ void on_trans_PreCharge_Charge()  { Serial.println("PreCharge OK → Charge"); }
 void on_trans_PreCharge_Fault()   { Serial.println("PreCharge FAILED → Fault"); }
 void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 
+// ── KL30C — external CAN wake standby ────────────────────────────────────────
+// Entered when the VCU wakes from sleep via CAN2 activity (EVCC or wireless
+// gateway) with KL15R still LOW (key not turned). No HV contactors are closed.
+// Exits to Off on KL15_ON (button 5), which then immediately proceeds to
+// PreCharge since KL15state is already true.
+// Sleeps when EVCCsessionActive is false, KL15R is low, and no EVCC heartbeat
+// or gateway frame has been seen for KL30C_SLEEP_TIMEOUT_MS.
+
+void KL30C_enter() {
+  Serial.println("Entering KL30C state");
+  VCUstate          = VCU_STATE_KL30C;
+  kl30cKL15Rstate   = false; // force LED edge detect on first check_KL30C() call
+  lastExtActivityMs = millis(); // reset timeout — start counting from now
+  PDUmsg1.buf[0]    = 0x00; // CH1 off — negative contactor
+  PDUmsg1.buf[3]    = 0x00; // CH4 off — positive contactor
+}
+
+void check_KL30C() {
+  // Flash button 1 (Park/P) LED while KL15R is high to signal standby mode.
+  bool kl15rNow = digitalRead(KL15R_PIN);
+  if (kl15rNow != kl30cKL15Rstate) {
+    kl30cKL15Rstate     = kl15rNow;
+    msg2.id             = 0x18EF2100;
+    msg2.flags.extended = 1;
+    msg2.len            = 8;
+    msg2.buf[0]         = 0x04;
+    msg2.buf[1]         = 0x1B;
+    msg2.buf[2]         = KEYPAD_CMD_SET_LED;
+    msg2.buf[3]         = 0x01; // button 1 — Park/P
+    msg2.buf[4]         = kl15rNow ? KEYPAD_COLOR_AMBER : KEYPAD_COLOR_OFF;
+    msg2.buf[5]         = kl15rNow ? KEYPAD_MODE_BLINK  : KEYPAD_MODE_SOLID;
+    msg2.buf[6]         = 0x00;
+    msg2.buf[7]         = 0xFF;
+    can2.write(msg2);
+  }
+
+  // AC plug detected → close main contactors via pre-charge sequence.
+  // DC sessions leave EVCC to handle its own contactors; VCU stays in KL30C.
+  if (EVCCsessionActive && evccIsACSession) {
+    fsm.trigger(AC_CHARGE_START);
+    return;
+  }
+
+  // Button 5 (KL15) pressed → transition to Off; Off's check_KL15() will see
+  // KL15state=true and immediately proceed to PreCharge.
+  if (KL15state) {
+    fsm.trigger(KL15_ON);
+    return;
+  }
+
+  // Sleep when: no active EVCC session, KL15R is low, and no external activity
+  // for KL30C_SLEEP_TIMEOUT_MS.
+  if (!EVCCsessionActive && !kl15rNow &&
+      millis() - lastExtActivityMs > KL30C_SLEEP_TIMEOUT_MS) {
+    Serial.println("KL30C timeout — sleeping");
+    enterSleep();
+  }
+}
+
+void KL30C_exit() {
+  Serial.println("Exiting KL30C state");
+  msg2.id             = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len            = 8;
+  msg2.buf[0]         = 0x04;
+  msg2.buf[1]         = 0x1B;
+  msg2.buf[2]         = KEYPAD_CMD_SET_LED;
+  msg2.buf[3]         = 0x01; // button 1 — Park/P
+  msg2.buf[4]         = KEYPAD_COLOR_OFF;
+  msg2.buf[5]         = KEYPAD_MODE_SOLID;
+  msg2.buf[6]         = 0x00;
+  msg2.buf[7]         = 0xFF;
+  can2.write(msg2);
+}
+
 // ── Sleep / wake ─────────────────────────────────────────────────────────────
 
 extern "C" uint32_t set_arm_clock(uint32_t frequency); // clockspeed.c
@@ -1458,16 +1554,16 @@ void enterSleep() {
   CCM_ANALOG_PLL_ARM |= CCM_ANALOG_PLL_ARM_BYPASS;    // CPU: crystal ref / ARM_PODF
   CCM_ANALOG_PLL_ARM |= CCM_ANALOG_PLL_ARM_POWERDOWN; // ARM PLL VCO off
 
-  // 3. GPIO interrupt on KLR rising edge; disable SysTick 1 ms tick.
+  // 3. GPIO interrupt on KL15R rising edge; disable SysTick 1 ms tick.
   //    Single WFI then sleeps until the actual wake event instead of every 1 ms.
-  //    If KLR is already high when WFI executes, the pending interrupt returns it
+  //    If KL15R is already high when WFI executes, the pending interrupt returns it
   //    immediately — no race condition.
-  attachInterrupt(digitalPinToInterrupt(KLR_PIN),    [](){}, RISING);   // key-on
+  attachInterrupt(digitalPinToInterrupt(KL15R_PIN),  [](){}, RISING);   // key-on
   attachInterrupt(digitalPinToInterrupt(CAN2_RX_PIN), [](){}, FALLING); // EVCC bus activity
   SYST_CSR &= ~1u;  // disable SysTick (bit 0 = ENABLE) — stops 1 ms wakeups
 
   // STOP mode — gates more internal domains than WAIT mode.
-  // Wake sources: KLR_PIN rising edge (key-on) or CAN2_RX_PIN falling edge (EVCC).
+  // Wake sources: KL15R_PIN rising edge (key-on) or CAN2_RX_PIN falling edge (EVCC).
   // AIRCR reset on wake restores all registers, so no clock restore needed.
   // To revert to WAIT mode: delete the two lines below.
   CCM_CLPCR = (CCM_CLPCR & ~0x3u) | 0x2u;  // LPM = 0b10 (STOP)
@@ -1475,11 +1571,15 @@ void enterSleep() {
 
   asm volatile("dsb");
   asm volatile("isb");
-  if (!digitalRead(KLR_PIN)) {
-    asm volatile("wfi");  // sleep until KLR rising edge
+  if (!digitalRead(KL15R_PIN)) {
+    asm volatile("wfi");  // sleep until KL15R rising edge or CAN2 falling edge
   }
 
   asm volatile("dsb");
+
+  // Set sleepMagic based on which signal woke us.
+  // KL15R HIGH = key was turned → normal boot; KL15R still LOW = CAN2 woke us → KL30C.
+  sleepMagic = digitalRead(KL15R_PIN) ? 0 : SLEEP_MAGIC_CAN_WAKE;
 
 #ifdef UBLOX_GNSS
   // Rising edge on EXTINT0 wakes the GNSS module for a hot-start while the Teensy resets.
@@ -1608,7 +1708,13 @@ void setup() {
 
   linInit();//BMW changeover valve LIN master on Serial3
 
-  pinMode(KLR_PIN, INPUT_PULLDOWN); // KLR key position 1 — LOW = key off → sleep
+  pinMode(KL15R_PIN, INPUT_PULLDOWN); // KL15R key position 1 — LOW = key off → sleep
+
+  // Detect CAN-wake boot: sleepMagic is set in enterSleep() based on wake source.
+  // SLEEP_MAGIC_CAN_WAKE + KL15R LOW = CAN2 woke the VCU → enter KL30C standby.
+  if (sleepMagic == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN))
+    extWakePending = true;
+  sleepMagic = 0; // clear so a cold-boot after this point does not misfire
 
   pinMode(CAN_STBY_PIN, OUTPUT);
   digitalWrite(CAN_STBY_PIN, LOW);    // transceivers active; driven HIGH in enterSleep()
@@ -1688,12 +1794,12 @@ void setup() {
     ads.startADCReading(ADS1X15_REG_CONFIG_MUX_SINGLE_0, false); // start first read
   }
 
-  // Guarantee at least 500 ms since PDU-8 CH2 was enabled before waking pMBB32.
-  // The dsPIC33 boots in <50 ms; 500 ms gives comfortable margin for the PL455
+  // Guarantee at least 250 ms since PDU-8 CH2 was enabled before waking pMBB32.
+  // The dsPIC33 boots in <50 ms; 250 ms gives comfortable margin for the PL455
   // wake sequence and daisy-chain reset before AutoAddress runs.
   {
     uint32_t elapsed = millis() - ch2OnAt;
-    if (elapsed < 500) delay(500 - elapsed);
+    if (elapsed < 250) delay(250 - elapsed);
   }
   wakepMBB32();
 
@@ -1872,6 +1978,11 @@ void setup() {
   fsm.add_transition(&state_HeatPack, &state_Idle,     TEMP_OK,   nullptr);
   fsm.add_transition(&state_CoolPack, &state_Idle,     TEMP_OK,   nullptr);
 
+  // KL30C — CAN/EVCC external wake standby
+  fsm.add_transition(&state_Off,   &state_KL30C,    EXT_WAKE,        nullptr);
+  fsm.add_transition(&state_KL30C, &state_Off,      KL15_ON,         nullptr);
+  fsm.add_transition(&state_KL30C, &state_PreCharge, AC_CHARGE_START, nullptr);
+
   // Set keypad LEDs to Off state
   msg2.id = 0x18EF2100;
   msg2.flags.extended = 1;
@@ -1899,7 +2010,13 @@ void setup() {
   msg2.buf[7] = 0xFF;
   can2.write(msg2);
   Off_enter();
-  
+
+  // CAN-wake boot detected above — enter KL30C standby immediately.
+  if (extWakePending) {
+    extWakePending = false;
+    fsm.trigger(EXT_WAKE);
+  }
+
   // // Set all keypad buttons to amber at startup
   // msg2.id = 0x18EF2100;//keypad button color command
   // msg2.flags.extended = 1;
@@ -1947,14 +2064,14 @@ void loop() {
 
     //timer.setTimer(30);// seconds
 
-  // KLR gone low (key off) while system is safe → hibernate.
-  // Debounce: only sleep after KLR has been continuously LOW for 500ms.
+  // KL15R gone low (key off) while system is safe → hibernate.
+  // Debounce: only sleep after KL15R has been continuously LOW for 500ms.
   // Gives the EVCC time to send New_Charge_Session (0x68001) after a CAN2 wake
   // before sleep is re-entered. Normal key-off behaviour is unchanged.
   // enterSleep() returns immediately if EVCCsessionActive (active charge session).
   {
     static uint32_t klrLowSince = 0;
-    if (digitalRead(KLR_PIN)) {
+    if (digitalRead(KL15R_PIN)) {
       klrLowSince = millis();
     } else if (VCUstate == VCU_STATE_OFF && millis() - klrLowSince > 500) {
       enterSleep();

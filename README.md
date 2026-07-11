@@ -256,7 +256,7 @@ Key constants (`defines.h`):
 | Pin | Function |
 |-----|----------|
 | 0 | CAN2 RXD wake input (`CAN2_RX_PIN`) — MCP2562 drives this low on bus activity; falling-edge interrupt wakes VCU from STOP mode for EVCC charge sessions |
-| 2 | KLR input (`KLR_PIN`) — key position 1, wakes hardware |
+| 2 | KL15R input (`KL15R_PIN`) — key position 1, wakes hardware and is sampled in `enterSleep()` to distinguish CAN-wake from key-on wake |
 | 3 | Loop timing debug output |
 | 4 | CAN1 RX timing debug output |
 | 5 | CAN2 RX timing debug output |
@@ -306,20 +306,25 @@ Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable s
 
 ```
   [KLR / Off] ──── KL15_ON (btn 5) ────> [PreCharge]
-       ^                                      │ IVT U2 ≥ 95% U1 within 2 s
-       │ KL15_OFF                             ├──────────────────────> [Idle]
-       │ (Park btn, speed = 0)                │ EVCC chargeMode = true
-       │ or FAULT_CLEAR                       ├──────────────────────> [Charge]
-       │ (Park btn, speed = 0)                │ timeout or FAULT_EV
-       │                                      └──────────────────────> [Fault]
+       ^ ^                                    │ IVT U2 ≥ 95% U1 within 2 s
+       │ │ KL15_OFF                           ├──────────────────────> [Idle]
+       │ │ (Park btn, speed = 0)              │ EVCC chargeMode = true
+       │ │ or FAULT_CLEAR                     ├──────────────────────> [Charge]
+       │ │ (Park btn, speed = 0)              │ timeout or FAULT_EV
+       │ │                                    └──────────────────────> [Fault]
+       │ │
+       │ │        DRIVE_ON (btn 8)      DRIVE_OFF (btn 1, speed = 0)
+       │ │        [Idle] ──────────────> [Drive] ──────────────────> [Idle]
+       │ │
+       │ │        TEMP_LOW / TEMP_HIGH                    TEMP_OK
+       │ │        [Idle/Drive/Charge] ──────> [HeatPack / CoolPack] ──> [Idle]
+       │ │
+       │ └── KL15_OFF (Park btn, speed = 0) from any On state ──> [Off]
        │
-       │          DRIVE_ON (btn 8)      DRIVE_OFF (btn 1, speed = 0)
-       │          [Idle] ──────────────> [Drive] ──────────────────> [Idle]
-       │
-       │          TEMP_LOW / TEMP_HIGH                    TEMP_OK
-       │          [Idle/Drive/Charge] ──────> [HeatPack / CoolPack] ──> [Idle]
-       │
-       └── KL15_OFF (Park btn, speed = 0) from any On state ──────> [Off]
+       │  EXT_WAKE (CAN2 wake, KL15R low)
+       └──────────────────────────────────── [KL30C] ─── KL15_ON ──> [Off]
+                                                │   └── AC_CHARGE_START ─> [PreCharge]
+                                                └── 60 s inactivity ──> sleep
 ```
 
 ### State table
@@ -334,8 +339,33 @@ Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable s
 | HeatPack | Pump on; heater on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
 | CoolPack | Pump on; AC exchanger on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
 | Fault | All contactors off; keypad red blink; fault SMS | Button 1 (Park) + speed=0 → `FAULT_CLEAR` (→ Off) |
+| KL30C | Minimal CAN-wake standby (no HV); EVCC heartbeat monitored; KL15R LED edge-detected | KL15 pressed → `KL15_ON` (→ Off); AC plug-in → `AC_CHARGE_START` (→ PreCharge); 60 s inactivity → `enterSleep()` |
 
 `reducedPowerActive` flag (set by BMS temp fault during Drive/Charge) clamps throttle to `THROTTLE_FAULT_LIMIT` without leaving Drive state.
+
+### KL30C and the sleepMagic mechanism
+
+When the EVCC (or wireless gateway) wakes the VCU over CAN2 with the key out, `enterSleep()` needs to communicate that fact to the `setup()` that runs after the subsequent AIRCR reset — there is no call stack or return address through a software reset.
+
+`sleepMagic` is a `DMAMEM volatile uint32_t` stored in OCRAM. OCRAM is ordinary SRAM: it is not cleared by hardware on an AIRCR (software) reset, and the Teensyduino CRT startup skips it (the BSS-zeroing loop covers only the `.bss` section in DTCM, not `.bss.dma` in OCRAM). The value therefore survives the reset intact, acting as a one-shot message from the sleeping firmware to the rebooting firmware.
+
+**In `enterSleep()`, just before the AIRCR reset:**
+```cpp
+sleepMagic = digitalRead(KL15R_PIN) ? 0 : SLEEP_MAGIC_CAN_WAKE;
+```
+- KL15R HIGH (key was turned while the VCU slept) → `sleepMagic = 0` → normal boot, Off state.
+- KL15R still LOW (CAN2 woke us, key never moved) → `sleepMagic = SLEEP_MAGIC_CAN_WAKE` → KL30C.
+
+**In `setup()`:**
+```cpp
+if (sleepMagic == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN))
+    extWakePending = true;
+sleepMagic = 0;  // clear immediately — cold-boot after this point must not misfire
+```
+If `extWakePending` is set, `fsm.trigger(EXT_WAKE)` fires before the main loop, placing the VCU in KL30C instead of Off.
+
+**Platform note — why not `.noinit`?**  
+`.noinit` is the conventional section name for this pattern on AVR and STM32, but the Teensyduino linker script (`imxrt1062_t41.ld`) has no such output section. GNU ld orphans the symbol after `.bss.extram` in the ERAM region (0x70000000). A Teensy 4.1 without external PSRAM has no memory there — any write triggers an immediate hardfault before serial output, leaving the board drawing ~42 mA with no response. `DMAMEM` (which maps to `.dmabuffers` → `.bss.dma`, OCRAM, NOLOAD) is the correct substitute.
 
 ---
 
@@ -390,7 +420,6 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 | Environment | Command | Purpose |
 |-------------|---------|---------|
 | `teensy41` (default) | `pio run` | Main VCU firmware |
-| `pMBB32_test` | `pio run -e pMBB32_test -t upload` | pMBB32 bench-test sketch — enables PDU-8 CH2, wakes all three modules, cycles through shutdown/wake for each, then enters continuous polling with a 5 s status report. Use to validate pMBB32 hardware and firmware without the full VCU stack. Monitor with `pio device monitor`. |
 
 ### Dependencies (auto-installed by PlatformIO)
 
