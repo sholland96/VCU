@@ -7,16 +7,46 @@ Built with PlatformIO / Arduino framework.
 
 ## Hardware
 
+### Core electronics
+
 | Item | Detail |
 |------|--------|
 | Carrier board | SK Pang Electronics Teensy 4.1 Triple CAN Board with ETH and u-blox NEO-M8M GNSS |
 | MCU | PJRC Teensy 4.1 (ARM Cortex-M7 @ 600 MHz) |
-| CAN | FlexCAN_T4 — two classic CAN + one CAN FD |
-| LIN | Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) — GNSS UART is on Serial2, no conflict |
+| CAN transceivers | 3× on SK Pang board (CAN1/2/3); STBY pins lifted from GND and wired to pin 32 — driven HIGH in sleep to put all three into standby |
+| LIN transceivers | 2× MCP2003B *(placeholder — TBD)* on Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
-| ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN_ONE ±4.096 V, 860 SPS) |
-| DCFC | Advantics ADM-CS-EVCC CCS/CHAdeMO charge controller (CAN2 @ 500 kbps, Generic Power Modules extended-ID protocol + v2.5 standard-ID AC handshake) |
+| ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN\_ONE ±4.096 V, 860 SPS) |
+| SMS modem | SIMCom SIM7080G NB-IoT / Cat-M1 — Serial4 (RX4=pin 16, TX4=pin 17); PWRKEY=pin 36 (pulse LOW ~1 s to power on) |
+
+### Powertrain
+
+| Item | Detail |
+|------|--------|
+| Current/voltage sensor | Isabellenhuette IVT-S-1K-U3-I-CAN1-12V — CAN2 @ 500 kbps; measures pack current, pack voltage U1, pre-charge voltage U2, DCFC inlet voltage U3, temperature, power, Ah/Wh counters |
+| Auxiliary DC-DC | *(placeholder — HV → 12 V auxiliary supply, model TBD)* |
+| Active pre-charge | Texas Instruments TPS131PXQ1EVM-400 evaluation board — enable via pin 34 (3.3 V HIGH); passive pre-charge relay (PDU-8 CH3) used in parallel until active board is commissioned |
+| Isolation monitor | SIM100MOD — CAN2 @ 500 kbps; reports isolation resistance (Rp kΩ) and temperature |
+
+### Charging
+
+| Item | Detail |
+|------|--------|
+| DCFC controller | Advantics ADM-CS-EVCC CCS / CHAdeMO — CAN2 @ 500 kbps; Generic Power Modules extended-ID protocol + v2.5 standard-ID AC handshake |
 | OBC | Elcon UHF-CAN-312 on-board charger for AC charging — VCU AC contactor path implemented; Elcon CAN protocol *(TODO)* |
+
+### Thermal management
+
+| Item | Detail |
+|------|--------|
+| Battery cooling pump | EMP WP29-12V-CV-A — CAN1 @ 500 kbps; Motor Command `0x18EF{pump}{vcu}` every 200 ms (byte 0: 0xFD=on / 0xFC=off; byte 3: speed %×2) |
+| Inverter cooling pump | EMP WP29-12V-CV-A — CAN2 @ 500 kbps; same frame layout |
+| Coolant changeover valves | 2× BMW 64119462114 — LIN slaves; node address *(TBD from BMW ISTA docs)* |
+
+### Driver interface
+
+| Item | Detail |
+|------|--------|
 | Throttle | EVWest dual-pot (OEM pedal) — ADS1115 AIN0 (track 1) / AIN1 (track 2) |
 | Brake | Brake pressure sensor — ADS1115 AIN2 |
 
