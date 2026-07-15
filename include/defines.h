@@ -297,17 +297,28 @@ uint8_t  battPumpSetpoint = 0;
 #define EVCC_PWR_LIMITS     0x60011u  // Power_Modules_Limits: Max_V(16b 0.1V LE), Max_I(16b s 0.1A LE), Reserved(32b)
 #define EVCC_SEQ_CTRL       0x60012u  // Sequence_Control: Start_Auth(b0), CHAdeMO_Btn(b1) | CCS_Done(b0), CCS_Valid(b1), Params_Done(b2) | User_Stop(b0)
 //
-// Plug_and_pins values (New_Charge_Session byte 1)
+// Advantics v2.5 PEV protocol — standard 11-bit IDs (AC handshake, coexists with extended-ID protocol)
+#define EVCC_EVSE_INFO      0x600u    // EVSE_Information: Stage(b0), Protocol(b1), Pins(b2), Max_I(b3:4 s A), RCD(b5.0) — received from EVCC
+#define EVCC_AC_CTRL        0x601u    // AC_Control: Ready_To_Deliver_Power(b0) — received from EVCC
+#define EVCC_AC_STATUS      0x611u    // AC_Status: Ready_To_Charge(b0) — sent by VCU every 62.5ms
+//
+// Plug_and_pins values (New_Charge_Session 0x68001 byte 1, old extended-ID protocol)
 #define EVCC_PLUG_CCS_DC_CORE  0u  // CCS DC Core (DIN 70121 / ISO 15118 basic)
 #define EVCC_PLUG_CCS_DC_EXT   1u  // CCS DC Extended
 #define EVCC_PLUG_CHADEMO      2u  // CHAdeMO
-// TODO: add AC plug type defines (e.g. Type 1 J1772, Type 2 IEC 62196) when values are confirmed
-// #define EVCC_PLUG_AC_TYPE1  3u
-// #define EVCC_PLUG_AC_TYPE2  4u
-// True for all currently-defined DC plug types; false (AC path) for any future AC value.
+// True for all defined DC plug types; any other value is treated as AC.
 #define EVCC_PLUG_IS_DC(p) ((p) == EVCC_PLUG_CCS_DC_CORE || \
                             (p) == EVCC_PLUG_CCS_DC_EXT  || \
                             (p) == EVCC_PLUG_CHADEMO)
+//
+// Pins values (EVSE_Information 0x600 byte 1, v2.5 standard-ID protocol)
+#define EVCC_PINS_CCS_AC       1u   // AC (generic)
+#define EVCC_PINS_CCS_AC_1PH   2u   // AC single-phase core
+#define EVCC_PINS_CCS_AC_3PH   3u   // AC three-phase core
+#define EVCC_PINS_CCS_DC_CORE  4u
+#define EVCC_PINS_CCS_DC_EXT   5u
+#define EVCC_PINS_MCS          6u
+#define EVCC_PINS_IS_AC(p)     ((p) >= 1u && (p) <= 3u)
 //
 // Battery charge limits — TODO: calibrate for actual pack configuration
 #define EVCC_MAX_VOLTAGE_x10  4200u  // 420.0 V pack maximum (0.1V units)

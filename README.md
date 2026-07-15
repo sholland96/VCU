@@ -15,8 +15,8 @@ Built with PlatformIO / Arduino framework.
 | LIN | Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) — GNSS UART is on Serial2, no conflict |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
 | ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN_ONE ±4.096 V, 860 SPS) |
-| DCFC | Advantics ADM-CS-EVCC CCS/CHAdeMO charge controller (CAN2 @ 500 kbps, Generic Power Modules protocol) |
-| OBC | Elcon UHF-CAN-312 on-board charger for AC charging *(not yet implemented)* |
+| DCFC | Advantics ADM-CS-EVCC CCS/CHAdeMO charge controller (CAN2 @ 500 kbps, Generic Power Modules extended-ID protocol + v2.5 standard-ID AC handshake) |
+| OBC | Elcon UHF-CAN-312 on-board charger for AC charging — VCU AC contactor path implemented; Elcon CAN protocol *(TODO)* |
 | Throttle | EVWest dual-pot (OEM pedal) — ADS1115 AIN0 (track 1) / AIN1 (track 2) |
 | Brake | Brake pressure sensor — ADS1115 AIN2 |
 
@@ -126,6 +126,7 @@ Devices: Isabellenhuette IVT-S-1K-U3-I-CAN1-12V, SIM100MOD, CAN keypad, OpenInve
 | `0x60010` | Extended | 62.5 ms | EVCC Power_Modules_Status — Present_Voltage (IVT U1, 0.1 V), Present_Current (IVT I, 0.1 A signed), System_Enable, Insulation_R (SIM100MOD Rp, 2 kΩ/bit) |
 | `0x60011` | Extended | 62.5 ms | EVCC Power_Modules_Limits — Max_Voltage (0.1 V), Max_Current (0.1 A signed) |
 | `0x60012` | Extended | 62.5 ms | EVCC Sequence_Control — Start_Charge_Authorisation, CHAdeMO_Start_Button, CCS_Auth_Done/Valid, Charge_Parameters_Done, User_Stop_Button |
+| `0x611` | **Standard** | 62.5 ms | EVCC AC_Status (v2.5) — `Ready_To_Charge` bit 0; set while VCU is in Charge state, EVCC has granted delivery (`acReadyToDeliver`), and battery is not full; cleared immediately on `Charge_exit()` |
 
 **OpenInverter LDU 0x201 frame — v5.32+ fixed bit-packed layout**
 
@@ -184,7 +185,9 @@ save
 | `0x55A` | — | OpenInverter LDU faults *(TODO: confirm ID)* |
 | `0x18FF03{pump}` | 1 Hz | EMP WP29 inverter cooling pump Motor Status 1 (speed, temp, power, controller status) |
 | `0x18FF24{pump}` | 100 ms | EMP WP29 inverter cooling pump Motor Status 3 (voltage, current, HVIL status) |
-| `0x68001` | on plug-in | EVCC New_Charge_Session — Communication_Protocol, Plug_and_pins (0=CCS_DC_Core, 1=CCS_DC_Extended, 2=CHAdeMO), EV_Max_Voltage/Current, Battery_Capacity, SoC |
+| `0x600` | **Standard** | 100 ms | EVCC EVSE_Information (v2.5) — Stage (b0), Protocol (b1), Pins (b2: 1=CCS_AC, 2=CCS_AC_1PH, 3=CCS_AC_3PH, 4=CCS_DC_Core, 5=CCS_DC_Extended, 6=MCS), Max_Current (b3:4 signed A), RCD (b5.0); AC session started when Pins 1–3 and no session active |
+| `0x601` | **Standard** | on event | EVCC AC_Control (v2.5) — `Ready_To_Deliver_Power` bit 0; latched as `acReadyToDeliver`; enables AC_Status Ready response |
+| `0x68001` | on plug-in | EVCC New_Charge_Session — Communication_Protocol, Plug_and_pins (0=CCS_DC_Core, 1=CCS_DC_Extended, 2=CHAdeMO; any other value → AC), EV_Max_Voltage/Current, Battery_Capacity, SoC |
 | `0x68002` | on demand | EVCC Insulation_Test — informational |
 | `0x68003` | on demand | EVCC Precharge — informational |
 | `0x68004` | on demand | EVCC Charge_Status_Change — Vehicle_Ready_for_Charging |
@@ -402,7 +405,7 @@ Key Contact state message format (PKP2400SI J1939 §6, event-driven by default):
 | Timer | Hardware | Period | Work |
 |-------|----------|--------|------|
 | **t0** | PIT (IntervalTimer) | **10 ms** | Throttle pipeline (read/verify/arbitrate/map); assemble and send LDU 0x201 safety frame |
-| t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update; EVCC Power_Modules_Status / Limits / Sequence_Control (0x60010 / 0x60011 / 0x60012) |
+| t1 | RTC | 62.5 ms | PDU-8 driver settings; pMBB32 min/max cell poll (round-robin); RealDash CAN3 update; EVCC Power_Modules_Status / Limits / Sequence_Control (0x60010 / 0x60011 / 0x60012); EVCC AC_Status (0x611, standard-ID) |
 | t2 | GPT1 | 200 ms | Send `0xFF0000` measurement trigger; invalidate stale module data; stale module recovery (wake + contReportingEnable); SIM100MOD isolation poll; LIN valve poll; inverter pump command (CAN2); battery pump command (CAN1) |
 | t3 | GPT2 | 1000 ms | Heartbeat LED toggle |
 | main loop | — | free-running | CAN event dispatch; GNSS processing; FSM step |
@@ -440,8 +443,8 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 - **Brake calibration** — bench-calibrate `BRAKE_THRESHOLD` (ADS1115 counts) against actual sensor output
 - **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` (ADS1115 counts; current values are ×8 approximations of old 12-bit readings)
 - **EVCC calibration** — set `EVCC_CELL_V_EMPTY` / `EVCC_CELL_V_FULL` (pMBB32 raw counts) for actual cell chemistry; set `EVCC_MAX_VOLTAGE_x10` and `EVCC_MAX_CURRENT_x10` for pack charge limits
-- **EVCC AC charging** — detect AC plug-in from `New_Charge_Session` (0x68001) `Plug_and_pins` field; AC value not in current DBC — confirm with Advantics; wire to FSM pre-charge path with main contactors; split `VCU_STATE_CHARGE` into `VCU_STATE_DCFC` and `VCU_STATE_AC_CHARGE`
-- **Elcon UHF-CAN-312 OBC** — implement AC on-board charger CAN interface for AC charging path; assign to CAN bus; add EVCC→OBC current forwarding
+- **EVCC AC charging** — AC session detection and EVCC handshake implemented: `New_Charge_Session` (0x68001) `Plug_and_pins` ≥ 3 or `EVSE_Information` (0x600) Pins 1–3 → `evccIsACSession`; `AC_Control` (0x601) → `acReadyToDeliver`; `AC_Status` (0x611) `Ready_To_Charge` sent every 62.5 ms; VCU closes main contactors via KL30C → PreCharge → Charge. Still pending: confirm actual Pins value sent by EVCC on AC plug-in by CAN sniff; split `VCU_STATE_CHARGE` into `VCU_STATE_DCFC` and `VCU_STATE_AC_CHARGE`; implement `CHARGE_OFF` transition from EVCC session-end event
+- **Elcon UHF-CAN-312 OBC** — VCU AC contactor and EVCC handshake path is implemented; Elcon CAN protocol not yet wired (assign to CAN bus; implement charge current forwarding from EVCC AC_Control)
 - **EMP WP29 pumps** — confirm pump J1939 source address (`EMP_WP29_ADDR`, currently `0x8A`) matches both pumps via CAN sniffer; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
 - **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
 - **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-S U2 (pre-charge voltage)

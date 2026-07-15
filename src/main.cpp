@@ -56,6 +56,7 @@ bool     extWakePending   = false; // set in setup() when CAN wake detected; con
 uint32_t lastExtActivityMs = 0;    // last EVCC heartbeat or gateway frame (for KL30C timeout)
 bool     kl30cKL15Rstate  = false; // tracks KL15R pin state inside KL30C for LED edge detect
 bool     evccIsACSession  = false; // true when plug type is AC → VCU closes main contactors
+bool     acReadyToDeliver = false; // set by AC_Control (0x601); EVCC grants AC power delivery
 
 VCUStateEnum VCUstate = VCU_STATE_OFF;
 State state_Off(&Off_enter, &check_KL15, &Off_exit);
@@ -201,6 +202,17 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
     msg2.buf[1] = EVCCsystemEnable ? 0x07u : 0x00u;   // CCS_Done | CCS_Valid | Params_Done
     msg2.buf[2] = normalEndOfCharge ? 0x01u : 0x00u;  // User_Stop_Button
     can2.write(msg2);
+
+    // 0x611 AC_Status (v2.5 standard-ID): Ready_To_Charge bit 0
+    // Ready only when EVCC has granted delivery, VCU is in Charge state, and battery is not full.
+    msg2.flags.extended = 0;
+    msg2.id  = EVCC_AC_STATUS;
+    msg2.len = 1;
+    msg2.buf[0] = (evccIsACSession && EVCCsessionActive
+                   && VCUstate == VCU_STATE_CHARGE
+                   && acReadyToDeliver && !normalEndOfCharge) ? 0x01u : 0x00u;
+    can2.write(msg2);
+    msg2.flags.extended = 1;
   }
 }//end of callback_cells_pdu()
 
@@ -798,6 +810,7 @@ void can2Sniff(const CAN_message_t &msg) {
       EVCCsystemEnable  = false;
       evccIsACSession   = false;
       chargeMode        = false;
+      acReadyToDeliver  = false;
       // TODO: fsm.trigger(FAULT_EV) when charge FSM states are split
       break;
     case EVCC_SESSION_END:  // 0x68007 — charge session finished normally
@@ -805,6 +818,7 @@ void can2Sniff(const CAN_message_t &msg) {
       EVCCsystemEnable  = false;
       evccIsACSession   = false;
       chargeMode        = false;
+      acReadyToDeliver  = false;
       // TODO: fsm.trigger(CHARGE_OFF) when charge FSM states are split
       break;
     case EVCC_CTRL_STATUS:  // 0x68009 — EVCC heartbeat (200ms timeout)
@@ -818,8 +832,22 @@ void can2Sniff(const CAN_message_t &msg) {
 
   }
 
+  // Advantics v2.5 PEV protocol — standard 11-bit IDs
   switch (msg.id) {
-
+    case EVCC_EVSE_INFO:  // 0x600 — EVSE_Information: byte0=Stage, byte1=Protocol, byte2=Pins
+      // Fallback session detection for v2.5: used when EVCC sends this instead of / in addition to 0x68001.
+      // Pins: 1=CCS_AC, 2=CCS_AC_1PH, 3=CCS_AC_3PH, 4=CCS_DC_Core, 5=CCS_DC_Extended
+      if (!EVCCsessionActive && EVCC_PINS_IS_AC(msg.buf[2])) {
+        EVCCsessionActive = true;
+        EVCCsystemEnable  = true;
+        EVCCemergencyStop = false;
+        evccIsACSession   = true;
+        chargeMode        = true;
+      }
+      break;
+    case EVCC_AC_CTRL:  // 0x601 — AC_Control: Ready_To_Deliver_Power (bit 0)
+      acReadyToDeliver = (msg.buf[0] & 0x01u) != 0;
+      break;
   }
   digitalWriteFast(5, LOW);
 }//end of can2Sniff(const CAN_message_t &msg)
@@ -1334,6 +1362,14 @@ void Charge_exit() {
   Serial.println("Exiting Charge state");
   PDUmsg1.buf[0] = 0x00; // CH1 off — negative contactor
   PDUmsg1.buf[3] = 0x00; // CH4 off — positive contactor
+  if (evccIsACSession) {
+    msg2.flags.extended = 0;
+    msg2.id  = EVCC_AC_STATUS;
+    msg2.len = 1;
+    msg2.buf[0] = 0x00;  // Ready_To_Charge = Not_Ready — EVCC opens AC relay
+    can2.write(msg2);
+    msg2.flags.extended = 1;
+  }
 }
 
 void check_Charge() {
