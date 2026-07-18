@@ -1,0 +1,37 @@
+#pragma once
+// State enter/exit callbacks
+void Off_enter();        void Off_exit();
+void PreCharge_enter();  void PreCharge_exit();
+void Idle_enter();       void Idle_exit();
+void Drive_enter();      void Drive_exit();
+void Charge_enter();     void Charge_exit();
+void HeatPack_enter();   void HeatPack_exit();
+void CoolPack_enter();   void CoolPack_exit();
+void Fault_enter();      void Fault_exit();
+void KL30C_enter();      void KL30C_exit();
+
+// State loop (check) callbacks
+void check_KL15();
+void check_PreCharge();
+void check_Idle();
+void check_DriveState();
+void check_Charge();
+void check_HeatPack();
+void check_CoolPack();
+void check_Fault();
+void check_KL30C();
+void check_KL17();   // dead code — kept for reference
+void check_Drive();  // dead code — kept for reference
+
+// Transition callbacks
+void on_trans_Off_Idle();
+void on_trans_Off_PreCharge();
+void on_trans_Idle_Off();
+void on_trans_Idle_Drive();
+void on_trans_Drive_Idle();
+void on_trans_Idle_Charge();
+void on_trans_Charge_Idle();
+void on_trans_PreCharge_Idle();
+void on_trans_PreCharge_Charge();
+void on_trans_PreCharge_Fault();
+void on_trans_Fault_Off();
