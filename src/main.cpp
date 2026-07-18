@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <SdFat.h>
 #include <TeensyTimerTool.h>
 #include <FlexCAN_T4.h>
 #include <LIN_master_HardwareSerial.h>  // LIN master on Serial3 (RX3=pin7, TX3=pin8)
@@ -57,8 +58,110 @@ uint32_t lastExtActivityMs = 0;    // last EVCC heartbeat or gateway frame (for 
 bool     kl30cKL15Rstate  = false; // tracks KL15R pin state inside KL30C for LED edge detect
 bool     evccIsACSession  = false; // true when plug type is AC → VCU closes main contactors
 bool     acReadyToDeliver = false; // set by AC_Control (0x601); EVCC grants AC power delivery
-
 VCUStateEnum VCUstate = VCU_STATE_OFF;
+
+// ── SD card logging ────────────────────────────────────────────────────────
+// Data log  (LOG_xxxx.CSV): one row per 200 ms via sdLogPending flag → loop().
+// Event log (EVT_xxxx.TXT): FSM transitions + key events; ISR events buffered.
+// Session counter (SESSION.TXT): increments each boot — files never overwrite.
+#define SD_EVT_SLOTS  8
+#define SD_EVT_LEN   48
+static SdFs             sd;
+static FsFile           dataFile;
+static FsFile           eventFile;
+static bool             sdOK        = false;
+static volatile bool    sdLogPending = false; // set by callback_t2, consumed by loop()
+static char             sdEvtBuf[SD_EVT_SLOTS][SD_EVT_LEN];
+static volatile uint8_t sdEvtHead   = 0;
+static volatile uint8_t sdEvtTail   = 0;
+
+static const char* const vcuStateStr[] = {
+    "OFF", "PRECHARGE", "IDLE", "DRIVE", "CHARGE",
+    "HEAT", "COOL", "FAULT", "KL30C"
+};
+
+// Internal push — caller must ensure exclusive access (noInterrupts or ISR context).
+static void sdQueueRaw(const char *msg) {
+    uint8_t next = (sdEvtHead + 1) % SD_EVT_SLOTS;
+    if (next == sdEvtTail) return; // queue full — drop
+    strncpy(sdEvtBuf[sdEvtHead], msg, SD_EVT_LEN - 1);
+    sdEvtBuf[sdEvtHead][SD_EVT_LEN - 1] = '\0';
+    sdEvtHead = next;
+}
+// Push from main-loop context (disables interrupts briefly to exclude ISR writers).
+void sdLogEvent(const char *msg)    { noInterrupts(); sdQueueRaw(msg); interrupts(); }
+// Push from ISR context (already have exclusive execution).
+void sdQueueEventISR(const char *msg) { sdQueueRaw(msg); }
+
+void sdFlushAll() {
+    if (!sdOK) return;
+    if (dataFile)  dataFile.flush();
+    if (eventFile) eventFile.flush();
+}
+
+// Drain event queue and write to SD — call from loop() only.
+static void sdDrainEvents() {
+    while (true) {
+        noInterrupts();
+        if (sdEvtTail == sdEvtHead) { interrupts(); break; }
+        uint8_t t = sdEvtTail;
+        char copy[SD_EVT_LEN];
+        memcpy(copy, sdEvtBuf[t], SD_EVT_LEN);
+        sdEvtTail = (t + 1) % SD_EVT_SLOTS;
+        interrupts();
+        if (sdOK && eventFile) {
+            eventFile.printf("[%lu] %s\n", millis(), copy);
+            eventFile.flush();
+        }
+    }
+}
+
+// Write one CSV row — call from loop() after sdLogPending fires.
+static void sdLogData() {
+    if (!sdOK || !dataFile) return;
+    static uint8_t flushCtr = 0;
+    dataFile.printf("%lu,%s,%ld,%ld,%ld,%u,%u,%u,%ld,%d,%u\n",
+        millis(),
+        vcuStateStr[VCUstate],
+        IVTpackVoltage, IVTpackCurrent, IVTpreChargeV,
+        highestCellV, lowestCellV,
+        SIM100MODRpKohms,
+        LDUrpm, (int)LDUtorqueSetpoint,
+        EVCCstage);
+    if (++flushCtr >= 25) { flushCtr = 0; dataFile.flush(); } // flush every 5 s
+}
+
+void sdInit() {
+    if (!sd.begin(SdioConfig(FIFO_SDIO))) {
+        Serial.println("[SD] init failed — no card or unsupported format");
+        return;
+    }
+    sdOK = true;
+
+    uint16_t session = 1;
+    {
+        FsFile f = sd.open("SESSION.TXT", O_RDONLY);
+        if (f) { session = (uint16_t)f.parseInt() + 1; f.close(); }
+    }
+    {
+        FsFile f = sd.open("SESSION.TXT", O_WRONLY | O_CREAT | O_TRUNC);
+        if (f) { f.printf("%u\n", session); f.close(); }
+    }
+
+    char name[16];
+    snprintf(name, sizeof(name), "LOG_%04u.CSV", session);
+    dataFile = sd.open(name, O_WRONLY | O_CREAT | O_TRUNC);
+    if (dataFile)
+        dataFile.println("ms,state,packV_mV,packI_mA,preV_mV,hiCellV,loCellV,sim_kohm,rpm,throttle,evcc_stage");
+
+    snprintf(name, sizeof(name), "EVT_%04u.TXT", session);
+    eventFile = sd.open(name, O_WRONLY | O_CREAT | O_TRUNC);
+
+    sdLogEvent("BOOT");
+    Serial.printf("[SD] session %u\n", session);
+}
+// ── end SD card logging ────────────────────────────────────────────────────
+
 State state_Off(&Off_enter, &check_KL15, &Off_exit);
 State state_PreCharge(&PreCharge_enter, &check_PreCharge, &PreCharge_exit);
 State state_Idle(&Idle_enter, &check_Idle, &Idle_exit);
@@ -312,6 +415,7 @@ void callback_t2() {
         ghostSince = 0;
         noInterrupts(); pMBB32ftSeen[0] = pMBB32ftSeen[1] = pMBB32ftSeen[2] = 0; interrupts();
         Serial.println("pMBB32: ghost SA detected (TOTAL_ICS corruption) — cycling PDU CH2");
+        sdQueueEventISR("GHOST_SA_CH2");
         PDUmsg1.buf[1] = 0;
         ch2.state = 1; ch2.t = millis();
         for (auto &mm : mods) { *mm.stale = 0; mm.phase = 0; mm.retryCount = 0; }
@@ -335,6 +439,8 @@ void callback_t2() {
         if (seenFt01 && !seenFt03) {
           Serial.printf("pMBB32 #%u: ft=03 absent (numChannels corrupted, seen=0x%03X)"
                         " — forcing recovery\n", i + 1, (unsigned)snap[i]);
+          static const char* const ft03Evt[] = {"MOD1_FT03_ABSENT","MOD2_FT03_ABSENT","MOD3_FT03_ABSENT"};
+          sdQueueEventISR(ft03Evt[i]);
           uint8_t *s = (i == 0 ? &pMBB32stale1 : i == 1 ? &pMBB32stale2 : &pMBB32stale3);
           *s = 255;
           nextFtCheck = millis() + 30000;  // 30 s gap; recovery takes 2-4 s + module boot
@@ -349,6 +455,7 @@ void callback_t2() {
       ch2.state = 2; ch2.t = millis();
     } else if (ch2.state == 2 && millis() - ch2.t >= 1000) {
       Serial.println("pMBB32 power cycle complete — waking all modules");
+      sdQueueEventISR("CH2_WAKE_ALL");
       for (auto &m : mods) {
         msg1.id = m.id; msg1.len = 3;
         msg1.buf[0] = wakeup; msg1.buf[1] = channelCount16; msg1.buf[2] = numberOfDevices;
@@ -370,6 +477,8 @@ void callback_t2() {
         if (m.phase == 0 && *m.stale > 5) {
           if (m.retryCount >= 3) {
             Serial.printf("pMBB32 #%u exhausted retries — cycling PDU CH2\n", m.num);
+            { static const char* const retryEvt[] = {"MOD1_RETRY_CH2","MOD2_RETRY_CH2","MOD3_RETRY_CH2"};
+              sdQueueEventISR(retryEvt[m.num - 1]); }
             PDUmsg1.buf[1] = 0;
             ch2.state = 1; ch2.t = millis();
             for (auto &mm : mods) { *mm.stale = 0; mm.phase = 0; mm.retryCount = 0; }
@@ -377,11 +486,15 @@ void callback_t2() {
           }
           *m.stale = 0;
           Serial.printf("pMBB32 #%u stale — sending shutdown\n", m.num);
+          { static const char* const shutEvt[] = {"MOD1_SHUTDOWN","MOD2_SHUTDOWN","MOD3_SHUTDOWN"};
+            sdQueueEventISR(shutEvt[m.num - 1]); }
           msg1.id = m.id; msg1.len = 1; msg1.buf[0] = shutdown;
           can1.write(msg1);
           m.phase = 1; m.phaseTime = millis();
         } else if (m.phase == 1 && millis() - m.phaseTime >= 500) {
           Serial.printf("pMBB32 #%u — sending wake\n", m.num);
+          { static const char* const wakeEvt[] = {"MOD1_WAKE","MOD2_WAKE","MOD3_WAKE"};
+            sdQueueEventISR(wakeEvt[m.num - 1]); }
           msg1.id = m.id; msg1.len = 3;
           msg1.buf[0] = wakeup; msg1.buf[1] = channelCount16; msg1.buf[2] = numberOfDevices;
           can1.write(msg1);
@@ -392,6 +505,7 @@ void callback_t2() {
     if (anyWoke) { msg1.id = 0xFF0000; msg1.len = 0; can1.write(msg1); }
   }
 
+  sdLogPending = true; // data row written in loop() — SD writes must not happen in ISR
   msg2.id = 0xA100101;//send SIM100MOD Request Isolation State command
   msg2.flags.extended = 1;
   msg2.len = 1;
@@ -796,6 +910,7 @@ void can2Sniff(const CAN_message_t &msg) {
       EVCCemergencyStop = false;
       evccIsACSession   = !EVCC_PLUG_IS_DC(EVCCplugType); // AC plug → VCU closes main contactors
       chargeMode        = evccIsACSession; // true routes PreCharge → Charge (not Idle)
+      sdLogEvent(evccIsACSession ? "EVCC_SESSION_AC" : "EVCC_SESSION_DC");
       // DC: EVCC handles its own pre-charge and contactors autonomously; VCU stays in KL30C.
       // AC: check_KL30C() detects evccIsACSession and fires AC_CHARGE_START → PreCharge → Charge.
       // TODO: update EVCC_PLUG_IS_DC macro when AC plug type values are confirmed.
@@ -811,6 +926,7 @@ void can2Sniff(const CAN_message_t &msg) {
       evccIsACSession   = false;
       chargeMode        = false;
       acReadyToDeliver  = false;
+      sdLogEvent("EVCC_EMERG_STOP");
       // TODO: fsm.trigger(FAULT_EV) when charge FSM states are split
       break;
     case EVCC_SESSION_END:  // 0x68007 — charge session finished normally
@@ -819,6 +935,7 @@ void can2Sniff(const CAN_message_t &msg) {
       evccIsACSession   = false;
       chargeMode        = false;
       acReadyToDeliver  = false;
+      sdLogEvent("EVCC_SESSION_END");
       // TODO: fsm.trigger(CHARGE_OFF) when charge FSM states are split
       break;
     case EVCC_CTRL_STATUS:  // 0x68009 — EVCC heartbeat (200ms timeout)
@@ -1169,6 +1286,7 @@ void Off_enter()
 {
   Serial.println("Entering Off state");
   VCUstate = VCU_STATE_OFF;
+  sdLogEvent("STATE:OFF");
 }
 
 void Off_exit()
@@ -1185,6 +1303,7 @@ void Idle_enter()
 {
   Serial.println("Entering Idle state");
   VCUstate = VCU_STATE_IDLE;
+  sdLogEvent("STATE:IDLE");
   //PDUmsg2.buf[3] = 0xFE;//HS driver 3 PWM set to 99%- positive pre-charge
   //PDUmsg1.buf[3] = 5;//HS driver 3 current limit 2A (2/0.4A = 5) - positive pre-charge
 
@@ -1248,12 +1367,14 @@ void Charge_enter()
 {
   Serial.println("Entering Charge state");
   VCUstate = VCU_STATE_CHARGE;
+  sdLogEvent("STATE:CHARGE");
 }
 
 void Drive_enter()
 {
   Serial.println("Entering Drive state");
   VCUstate = VCU_STATE_DRIVE;
+  sdLogEvent("STATE:DRIVE");
 }
 
 void Idle_exit()
@@ -1307,6 +1428,7 @@ void on_trans_Charge_Idle()
 void PreCharge_enter() {
   Serial.println("Entering PreCharge state");
   VCUstate = VCU_STATE_PRECHARGE;
+  sdLogEvent("STATE:PRECHARGE");
   preChargeStartTime = millis();
   PDUmsg1.buf[0] = 0x0D; // CH1 5A — negative contactor on
   PDUmsg1.buf[2] = 0x05; // CH3 2A — passive pre-charge relay (remove when active pre-charge fitted)
@@ -1323,8 +1445,10 @@ void check_PreCharge() {
   if (IVTpackVoltage > 0 &&
       IVTpreChargeV >= (IVTpackVoltage * 95 / 100)) {
     PDUmsg1.buf[3] = 0x0D; // CH4 5A — positive contactor on
+    sdLogEvent("PRECHARGE_OK");
     fsm.trigger(chargeMode ? PRECHARGE_CHARGE : PRECHARGE_OK);
   } else if (millis() - preChargeStartTime > PRECHARGE_TIMEOUT_MS) {
+    sdLogEvent("PRECHARGE_FAIL");
     fsm.trigger(PRECHARGE_FAIL);
   }
 }
@@ -1387,6 +1511,7 @@ void check_Charge() {
 void Fault_enter() {
   Serial.println("Entering Fault state");
   VCUstate = VCU_STATE_FAULT;
+  sdLogEvent("STATE:FAULT");
   PDUmsg1.buf[0] = 0x00; // CH1 off — negative contactor
   PDUmsg1.buf[2] = 0x00; // CH3 off — pre-charge relay
   PDUmsg1.buf[3] = 0x00; // CH4 off — positive contactor
@@ -1423,6 +1548,7 @@ void check_Fault() {
 void HeatPack_enter() {
   Serial.println("Entering HeatPack state");
   VCUstate = VCU_STATE_HEAT_PACK;
+  sdLogEvent("STATE:HEAT");
   // TODO: set invPumpSetpoint/battPumpSetpoint; enable heater output
 }
 
@@ -1439,6 +1565,7 @@ void check_HeatPack() {
 void CoolPack_enter() {
   Serial.println("Entering CoolPack state");
   VCUstate = VCU_STATE_COOL_PACK;
+  sdLogEvent("STATE:COOL");
   // TODO: set invPumpSetpoint/battPumpSetpoint; enable AC exchanger
 }
 
@@ -1471,6 +1598,7 @@ void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 void KL30C_enter() {
   Serial.println("Entering KL30C state");
   VCUstate          = VCU_STATE_KL30C;
+  sdLogEvent("STATE:KL30C");
   kl30cKL15Rstate   = false; // force LED edge detect on first check_KL30C() call
   lastExtActivityMs = millis(); // reset timeout — start counting from now
   PDUmsg1.buf[0]    = 0x00; // CH1 off — negative contactor
@@ -1543,6 +1671,8 @@ void enterSleep() {
   if (EVCCsessionActive) return;  // active EVCC charge session — stay awake
 
   Serial.println("KLR off — sleeping");
+  sdLogEvent("SLEEP");
+  sdFlushAll();
   Serial.flush();
 
   // 1. Power down USB PHY and gate its clock — restores automatically on AIRCR reset.
@@ -1842,6 +1972,8 @@ void setup() {
   t2.begin(callback_t2, t2CallbackRate);
   t3.begin(callback_t3, t3CallbackRate);
 
+  sdInit(); // must be after timers start (uses millis())
+
   msg2.id = 0x412;//send IVT command
   msg2.flags.extended = 0;
   msg2.len = 6;
@@ -2084,10 +2216,14 @@ void setup() {
 
 /* Main */
 void loop() {
-  digitalWriteFast(3, HIGH);  
+  digitalWriteFast(3, HIGH);
 
   can1.events();//Call to look for any input
   can2.events();//Call to look for any input
+
+  // SD logging — must run in main-loop context; SD writes are not ISR-safe.
+  if (sdLogPending) { sdLogPending = false; sdLogData(); }
+  sdDrainEvents();
   //can3.events();//Output only
 
   // readThrottle() is called from callback_t0() at precise 10ms intervals
