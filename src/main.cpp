@@ -1134,66 +1134,7 @@ void ReadAnalogStatuses() {
 
 void displayStatus() {
   digitalWriteFast(6, HIGH);
-  /*
-  Serial.print("keypadStatus: ");
-  Serial.println(keypadStatus, BIN);
-  Serial.print("Pack Current: ");
-  //Serial.print(msg.buf[msg.buf[5]] < 16 ? "0" : ""); Serial.println(msg.buf[5], HEX); 
-  Serial.print(packCurrent, HEX);
-  Serial.println("mA ");
-  Serial.print("Pack Voltage: ");
-  Serial.print(packV, HEX);
-  Serial.print("mV ");
-  Serial.print("Pre-charge Voltage: ");
-  Serial.print(preChargeV, HEX);
-  Serial.print("mV ");
-  Serial.print("U3 Voltage: ");
-  Serial.print(U3V, HEX);
-  Serial.println("mV ");
-  Serial.print("Module ");
-  Serial.print(minModule, DEC);
-  Serial.print(" min cell #:  ");
-  Serial.print(minCell);
-  Serial.print(", 0x");
-  Serial.print(minCellV, HEX);
-  Serial.print(", ");
-  Serial.print((float)minCellV*ADCres, 3);
-  Serial.println("V ");
-  Serial.print("Module ");
-  Serial.print(maxModule, DEC);
-  Serial.print(" max cell #:  ");
-  Serial.print(maxCell, DEC);
-  Serial.print(", 0x");
-  Serial.print(maxCellV, HEX);
-  Serial.print(", ");
-  Serial.print((float)maxCellV*ADCres, 3);
-  Serial.println("V ");
-  Serial.print("CAN Staleness... #1:");
-  Serial.print(pMBB32stale1, DEC);
-  Serial.print(" #2:");
-  Serial.print(pMBB32stale2, DEC);
-  Serial.print(" #3:");
-  Serial.println(pMBB32stale3, DEC);
-  Serial.print("Fix? ");
-  Serial.println(myGNSS.getGnssFixOk(), DEC);
-  Serial.print("Number of Satellites: ");
-  Serial.println(myGNSS.getSIV(), DEC);
-  Serial.print("Altitude ");
-  Serial.print(myGNSS.getAltitudeMSL() / 3300, DEC); Serial.println(" feet");
-  Serial.print("Speed ");
-  Serial.print(myGNSS.getGroundSpeed() * 0.00223694, DEC);  Serial.println(" mph");//convert mm/s to mph
-
-  */
-
-  //Serial.print("CAN Staleness... #1:");
-  //Serial.print(pMBB32stale1, DEC);
-  //Serial.print(" #2:");
-  //Serial.print(pMBB32stale2, DEC);
-  //Serial.print(" #3:");
-  //Serial.print(pMBB32stale3, DEC);
-  //Serial.print(" Max:");
-  //Serial.println(pMBB32staleMax, DEC);
-
+  
   rpm += 100;
   if(rpm >= 13000)
     rpm = 0;
@@ -1225,7 +1166,7 @@ void displayStatus() {
   msg3.buf[6] = throttle*10;//TPS = V/10
   msg3.buf[7] = (throttle*10)>>8;
   can3.write(msg3); 
-  delay(1);
+  //delay(1);
 
   msg3.id = 0xc81;
   msg3.len = 8;
@@ -1238,7 +1179,7 @@ void displayStatus() {
   msg3.buf[6] = batteryVoltage;
   msg3.buf[7] = batteryVoltage>>8;
   can3.write(msg3);
-  delay(1);
+  //delay(1);
 
   msg3.id = 0xc82;
   msg3.len = 8;
@@ -1251,7 +1192,7 @@ void displayStatus() {
   msg3.buf[6] = GPSaltitude;
   msg3.buf[7] = GPSaltitude>>8;
   can3.write(msg3);
-  delay(1);
+  //delay(1);
 
   msg3.id = 0xc83;
   msg3.len = 8;

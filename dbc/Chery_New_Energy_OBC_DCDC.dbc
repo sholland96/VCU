@@ -1,0 +1,56 @@
+VERSION ""
+
+NS_ : 
+    NS_DESC_
+    CM_
+    BA_DEF_
+    BA_
+    VAL_
+    CAT_DEF_
+    CAT_
+    FILTER
+    BA_DEF_DEF_
+    EV_DATA_
+    ENVVAR_DATA_
+    SGTYPE_
+    SGTYPE_VAL_
+    BA_DEF_SGTYPE_
+    BA_SGTYPE_
+    SIG_TYPE_REF_
+    VAL_TABLE_
+    SIG_VALTYPE_
+    SIG_GROUP_
+    SIG_BUG_
+    TALK_FCT_
+    TX_NODE_
+    BO_TX_BU_
+    SP_TYPE_
+    BO_TX_FLAGS_
+
+BS_:
+
+BU_: VCU OBC DCDC
+
+BO_ 2364112836 VCU_DCDC_Command: 8 VCU
+ SG_ DCDC_Enable : 7|8@0+ (1,0) [0|1] "" DCDC
+ SG_ DCDC_TargetVoltage : 15|16@0+ (0.1,0) [0|20] "V" DCDC
+
+BO_ 2420959452 VCU_OBC_Command: 8 VCU
+ SG_ OBC_TargetVoltage : 7|16@0+ (0.1,0) [0|500] "V" OBC
+ SG_ OBC_TargetCurrent : 23|16@0+ (0.1,0) [0|50] "A" OBC
+ SG_ OBC_ChargeControl : 39|8@0+ (1,0) [0|1] "" OBC
+
+BO_ 2364113572 DCDC_Telemetry: 8 DCDC
+ SG_ DCDC_HV_InputVoltage : 7|16@0+ (0.1,0) [0|500] "V" VCU
+ SG_ DCDC_LV_OutputVoltage : 23|16@0+ (0.1,0) [0|20] "V" VCU
+ SG_ DCDC_LV_OutputCurrent : 39|16@0+ (0.1,0) [0|250] "A" VCU
+ SG_ DCDC_Temperature : 55|8@0+ (1,-40) [-40|120] "C" VCU
+
+BO_ 2420061348 OBC_Telemetry: 8 OBC
+ SG_ OBC_AC_InputVoltage : 7|16@0+ (1,0) [0|300] "V" VCU
+ SG_ OBC_HV_OutputVoltage : 23|16@0+ (0.1,0) [0|500] "V" VCU
+ SG_ OBC_HV_OutputCurrent : 39|16@0+ (0.1,0) [0|50] "A" VCU
+ SG_ OBC_StatusFlags : 55|8@0+ (1,0) [0|255] "" VCU
+
+VAL_ 2364112836 DCDC_Enable 1 "Enable" 0 "Disable_Standby" ;
+VAL_ 2420959452 OBC_ChargeControl 0 "Charge_ON_Run" 1 "Charge_OFF_Stop" ;
