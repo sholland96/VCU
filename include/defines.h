@@ -21,8 +21,40 @@ extern VCUStateEnum VCUstate; // defined in main.cpp
 #include <FlexCAN_T4.h>
 
 // Shared CAN bus/message objects — defined in main.cpp.
+extern FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_16> can2;
 extern FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> can3;
+extern CAN_message_t msg2;
 extern CAN_message_t msg3;
+extern CAN_message_t PDUmsg1;
+extern CAN_message_t PDUmsg2;
+
+#include "Fsm.h"
+extern Fsm fsm; // defined in main.cpp
+
+// FSM events — unique integers required by arduino-fsm
+#define KL15_ON          1
+#define KL15_OFF         2
+#define DRIVE_ON         3
+#define DRIVE_OFF        4
+#define CHARGE_ON        5
+#define CHARGE_OFF       6
+#define PRECHARGE_OK     7
+#define PRECHARGE_CHARGE 8  // pre-charge succeeded via EVCC path → go to Charge
+#define PRECHARGE_FAIL   9
+#define FAULT_EV         10
+#define FAULT_CLEAR      11
+#define TEMP_LOW         12
+#define TEMP_HIGH        13
+#define TEMP_OK          14
+#define EXT_WAKE         15  // CAN/EVCC external wake without KL15R
+#define AC_CHARGE_START  16  // AC plug detected in KL30C → close main contactors via PreCharge
+
+#define KL30C_SLEEP_TIMEOUT_MS 60000UL  // sleep after 60 s of inactivity in KL30C
+
+// Cross-module state flags — defined in main.cpp.
+extern uint32_t lastExtActivityMs; // last EVCC heartbeat or gateway frame (for KL30C timeout)
+extern bool     kl30cKL15Rstate;   // tracks KL15R pin state inside KL30C for LED edge detect
+extern bool     evccIsACSession;   // true when plug type is AC → VCU closes main contactors
 
 #include <TeensyTimerTool.h>
 // Shared timer objects — defined in main.cpp.
