@@ -21,12 +21,20 @@ extern VCUStateEnum VCUstate; // defined in main.cpp
 #include <FlexCAN_T4.h>
 
 // Shared CAN bus/message objects — defined in main.cpp.
+extern FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can1;
 extern FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_16> can2;
 extern FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> can3;
+extern CAN_message_t msg1;
 extern CAN_message_t msg2;
 extern CAN_message_t msg3;
 extern CAN_message_t PDUmsg1;
 extern CAN_message_t PDUmsg2;
+extern CAN_message_t LDUmsg;
+
+// pMBB32 ghost-SA / frame-type tracking — defined in main.cpp, set by can1Sniff,
+// consumed/reset by callback_t2.
+extern volatile bool     pMBB32ghostSA;
+extern volatile uint16_t pMBB32ftSeen[3];
 
 #include "Fsm.h"
 extern Fsm fsm; // defined in main.cpp
@@ -55,6 +63,7 @@ extern Fsm fsm; // defined in main.cpp
 extern uint32_t lastExtActivityMs; // last EVCC heartbeat or gateway frame (for KL30C timeout)
 extern bool     kl30cKL15Rstate;   // tracks KL15R pin state inside KL30C for LED edge detect
 extern bool     evccIsACSession;   // true when plug type is AC → VCU closes main contactors
+extern bool     acReadyToDeliver;  // set by AC_Control (0x601); EVCC grants AC power delivery
 
 #include <TeensyTimerTool.h>
 // Shared timer objects — defined in main.cpp.
@@ -465,11 +474,6 @@ extern int analogPins[7];
 
 void displayStatus();
 
-void can1Sniff(const CAN_message_t);
-void can2Sniff(const CAN_message_t);
-void can3Sniff(const CAN_message_t);
-
-void initCAN (int, int, int);
 void wakepMBB32();
 void shutdownpMBB32();
 
