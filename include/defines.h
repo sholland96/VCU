@@ -18,6 +18,12 @@ typedef enum {
 
 extern VCUStateEnum VCUstate; // defined in main.cpp
 
+#include <FlexCAN_T4.h>
+
+// Shared CAN bus/message objects — defined in main.cpp.
+extern FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> can3;
+extern CAN_message_t msg3;
+
 #define KEYPAD_COLOR_OFF          0
 #define KEYPAD_COLOR_RED          1
 #define KEYPAD_COLOR_GREEN        2
@@ -412,8 +418,6 @@ extern uint8_t displayBuffer[16];
 
 extern unsigned int digitalPins;
 extern int analogPins[7];
-
-#include <FlexCAN_T4.h>
 
 void displayStatus();
 
