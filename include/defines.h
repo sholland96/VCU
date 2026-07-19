@@ -1,21 +1,7 @@
-#pragma once
 /* defines.h
- * Macros, types, and extern declarations.
- * Actual variable definitions live in globals.cpp.
- */
+*
+*/
 
-// ── Feature flags — must be defined before any #ifdef checks ─────────────────
-#define UBLOX_GNSS
-//#define PMBBB32_DEBUG
-
-// ── Library includes (needed here for type declarations) ──────────────────────
-#include <Adafruit_ADS1X15.h>
-#ifdef UBLOX_GNSS
-#include <Wire.h>
-#include <SparkFun_u-blox_GNSS_Arduino_Library.h>
-#endif
-
-// ── Enum types ────────────────────────────────────────────────────────────────
 typedef enum {
   VCU_STATE_OFF = 0,
   VCU_STATE_PRECHARGE,
@@ -28,7 +14,6 @@ typedef enum {
   VCU_STATE_KL30C   // external CAN wake (EVCC/gateway) with KL15R low
 } VCUStateEnum;
 
-// ── Keypad LED color index (byte 4 of SET_LED command) ───────────────────────
 #define KEYPAD_COLOR_OFF          0
 #define KEYPAD_COLOR_RED          1
 #define KEYPAD_COLOR_GREEN        2
@@ -46,23 +31,25 @@ typedef enum {
 #define KEYPAD_MODE_ALT_BLINK     0x03
 
 // Keypad functional control commands (byte 2)
-#define KEYPAD_CMD_SET_LED                0x01
-#define KEYPAD_CMD_LIVE_BRIGHTNESS        0x03
-#define KEYPAD_CMD_LIVE_BACKLIGHT_COLOR   0x1C
-#define KEYPAD_CMD_BATCH_MODE             0x37
-#define KEYPAD_CMD_BACKLIGHT_BRIGHTNESS   0x7B
-#define KEYPAD_CMD_STATUS_LED_BRIGHTNESS  0x7C
-#define KEYPAD_CMD_BACKLIGHT_COLOR        0x7D
-#define KEYPAD_CMD_EVENT_TX               0x72
-#define KEYPAD_CMD_PERIODIC_TX            0x71
-#define KEYPAD_CMD_TX_SPEED               0x77
-#define KEYPAD_CMD_BAUD_RATE              0x6F
-#define KEYPAD_CMD_SOURCE_ADDR            0x70
-#define KEYPAD_CMD_FACTORY_RESET          0x34
+#define KEYPAD_CMD_SET_LED                0x01  // set individual button LED color/mode
+#define KEYPAD_CMD_LIVE_BRIGHTNESS        0x03  // live brightness command
+#define KEYPAD_CMD_LIVE_BACKLIGHT_COLOR   0x1C  // live global backlight color (byte 3: color index)
+#define KEYPAD_CMD_BATCH_MODE             0x37  // switch single vs batch LED mode
+#define KEYPAD_CMD_BACKLIGHT_BRIGHTNESS   0x7B  // global backlight brightness (byte 3: 0x00–0x3F)
+#define KEYPAD_CMD_STATUS_LED_BRIGHTNESS  0x7C  // button status LED brightness (byte 3: 0x00–0x3F)
+#define KEYPAD_CMD_BACKLIGHT_COLOR        0x7D  // global backlight color (byte 3: color index)
+#define KEYPAD_CMD_EVENT_TX               0x72  // toggle event-driven transmissions
+#define KEYPAD_CMD_PERIODIC_TX            0x71  // toggle periodic heartbeat transmission
+#define KEYPAD_CMD_TX_SPEED               0x77  // periodic TX interval (byte 3: value × 10ms)
+#define KEYPAD_CMD_BAUD_RATE              0x6F  // change CAN baud rate
+#define KEYPAD_CMD_SOURCE_ADDR            0x70  // change device source address
+#define KEYPAD_CMD_FACTORY_RESET          0x34  // factory reset (byte 3: 0x01 to confirm)
 
-#define KEYPAD_BATCH_SINGLE           0x00
-#define KEYPAD_BATCH_ENABLE           0x01
+// Batch LED mode selections (byte 3 for KEYPAD_CMD_BATCH_MODE)
+#define KEYPAD_BATCH_SINGLE           0x00  // standard single-LED mode (default)
+#define KEYPAD_BATCH_ENABLE           0x01  // batch LED mode
 
+// CAN baud rate selections (byte 3 for KEYPAD_CMD_BAUD_RATE)
 #define KEYPAD_BAUD_125K              0x00
 #define KEYPAD_BAUD_250K              0x01
 #define KEYPAD_BAUD_500K              0x02
@@ -78,221 +65,407 @@ typedef enum {
 #define t2CallbackRate 200ms
 #define t3CallbackRate 1000ms
 
-// ADS1115 — I2C0 (Wire, SDA=18, SCL=19), ADDR→GND = 0x48
+#define UBLOX_GNSS
+//#define PMBBB32_DEBUG  // print all 0x18FF__ CAN1 frames + stale counters to Serial
+
+// ADS1115 16-bit 4-channel ADC — I2C0 (Wire, SDA=18, SCL=19), ADDR pin → GND = 0x48.
+// Channels: AIN0=throttle pot 1, AIN1=throttle pot 2, AIN2=brake pedal, AIN3=spare.
+// Gain: GAIN_ONE (±4.096 V) — suitable for 3.3V-referenced sensors.
+// If sensors are 5V-referenced change to GAIN_TWOTHIRDS (±6.144 V) and re-calibrate.
+#include <Adafruit_ADS1X15.h>
+Adafruit_ADS1115 ads;
 #define ADS1115_ADDR  0x48
 
 #ifdef UBLOX_GNSS
+#include <Wire.h>
+#include <SparkFun_u-blox_GNSS_Arduino_Library.h>
+
+// SK Pang board: NEO-M8M GNSS on I2C0 — Wire (SDA=pin 18, SCL=pin 19)
+// 1PPS output from NEO-M8M is routed to Teensy pin 35 on the SK Pang board.
+// EXTINT header on SK Pang board wired to this Teensy output — rising edge
+// wakes the module from backup mode before AIRCR reset.
 #define GPS_PPS_PIN       35
-#define GNSS_EXTINT_PIN   33
+#define GNSS_EXTINT_PIN   33  // free GPIO — wire to NEO-M8M EXTINT header on SK Pang board
+
+// CAN transceiver standby — drive HIGH to put all three transceivers into standby during sleep.
+// STBY pins lifted from GND on SK Pang board and wired to this pin.
 #define CAN_STBY_PIN      32
+
+// CAN2 RXD wake input — MCP2562 in standby still drives RXD low on dominant bus edges,
+// allowing the EVCC to wake the VCU without KLR. CANRX2 / UART RX1 = pin 0 (confirmed).
 #define CAN2_RX_PIN       0
+
+// TPS131PXQ1EVM-400 active pre-charge enable (TIDA-050082).
+// Drive HIGH to enable; LOW to disable. Monitored by check_PreCharge() via IVT U2.
 #define PRECHARGE_EN_PIN  34
+
+// Waveshare SIM7080G Cat-M/NB-IoT HAT — cellular modem (LTE-M, T-Mobile)
+// UART: Serial4 (TX=17, RX=16) at 115200 baud, 3.3V logic (HAT default).
+// PWRKEY: pulse LOW for ~1 s on startup to power on the module.
+// SMS via AT+CMGS; data via AT+CNACT / AT+SHCONN (HTTPS).
+// Do not connect HAT GNSS antenna — u-blox NEO-M8M already fitted.
 #define SIM7080_SERIAL    Serial4
 #define SIM7080_BAUD      115200
-#define SIM7080_PWRKEY    36
+#define SIM7080_PWRKEY    36    // pulse LOW ~1 s to power on module
+
+SFE_UBLOX_GNSS myGNSS;
 #endif
 
-// ── Library object instances (defined in globals.cpp) ────────────────────────
-extern Adafruit_ADS1115 ads;
-#ifdef UBLOX_GNSS
-extern SFE_UBLOX_GNSS myGNSS;
-#endif
+uint8_t pMBB32stale1;
+uint8_t pMBB32stale2;
+uint8_t pMBB32stale3;
+uint8_t pMBB32staleMax;
+uint32_t lastUpdatePMBB1 = 0;
+uint32_t lastUpdatePMBB2 = 0;
+uint32_t lastUpdatePMBB3 = 0;
 
-// ── pMBB32 stale / update timestamps ─────────────────────────────────────────
-extern uint8_t  pMBB32stale1;
-extern uint8_t  pMBB32stale2;
-extern uint8_t  pMBB32stale3;
-extern uint8_t  pMBB32staleMax;
-extern uint32_t lastUpdatePMBB1;
-extern uint32_t lastUpdatePMBB2;
-extern uint32_t lastUpdatePMBB3;
+uint8_t counter = 0;
 
-// ── Misc / legacy ─────────────────────────────────────────────────────────────
-extern uint8_t  counter;
-extern float    ADCres;
-extern uint8_t  serialBlockTag[];
-extern uint8_t  frameID[];
-extern uint8_t  who;
-extern uint32_t temp;
+float ADCres = 0.000076293945;
 
-// ── Cell voltage tracking (per module) ───────────────────────────────────────
-extern uint8_t  minCell1, maxCell1, minCell2, maxCell2, minCell3, maxCell3;
-extern uint8_t  minModule1, maxModule1, minModule2, maxModule2, minModule3, maxModule3;
-extern uint16_t minCellV1, maxCellV1;
-extern uint16_t minCellV2, maxCellV2;
-extern uint16_t minCellV3, maxCellV3;
-extern uint16_t lowestCellV,  lowestCell,  lowestModule;
-extern uint16_t highestCellV, highestCell, highestModule;
+uint8_t serialBlockTag[] = {0x44,0x33,0x22,0x11};
+uint8_t frameID[] = {0x0c,0x08};
 
-// ── IVT-S-1K-U3-I-CAN1-12V ───────────────────────────────────────────────────
-extern int32_t IVTpackCurrent;
-extern int32_t IVTpackVoltage;
-extern int32_t IVTpreChargeV;
-extern int32_t IVTvoltage3;
-extern int32_t IVTtemp;
-extern int32_t IVTpower;
-extern int32_t IVTcoulombCounter;
-extern int32_t IVTenergyCounter;
+uint8_t who;
+uint32_t temp;
+uint8_t minCell1;
+uint8_t maxCell1;
+uint8_t minCell2;
+uint8_t maxCell2;
+uint8_t minCell3;
+uint8_t maxCell3;
+uint8_t minModule1;
+uint8_t maxModule1;
+uint8_t minModule2;
+uint8_t maxModule2;
+uint8_t minModule3;
+uint8_t maxModule3;
+uint16_t minCellV1 = 0xFFFF;
+uint16_t maxCellV1 = 0;
+uint16_t minCellV2 = 0xFFFF;
+uint16_t maxCellV2 = 0;
+uint16_t minCellV3 = 0xFFFF;
+uint16_t maxCellV3 = 0;
+uint16_t lowestCellV;
+uint16_t lowestCell;
+uint16_t lowestModule;
+uint16_t highestCellV;
+uint16_t highestCell;
+uint16_t highestModule;
+int32_t IVTpackCurrent;//1mA resolution, signed (negative = discharge)
+int32_t IVTpackVoltage;//1mV resolution
+int32_t IVTpreChargeV;//1mV resolution
+int32_t IVTvoltage3;//1mV resolution
+int32_t IVTtemp;//0.1°C resolution, signed
+int32_t IVTpower;//1W resolution, signed (negative = regen)
+int32_t IVTcoulombCounter;//1As resolution, signed
+int32_t IVTenergyCounter;//1Wh resolution, signed
+uint16_t SIM100MODohmsPerVolt;
+uint16_t SIM100MODRpKohms;
+uint16_t SIM100MODRnKohms;
+uint16_t SIM100MODCpnF;
+uint16_t SIM100MODCnnF;
+uint16_t SIM100MODVp;
+uint16_t SIM100MODVn;
+uint16_t SIM100MODVb;
+uint16_t SIM100MODVbMax;
+uint8_t SIMM100MODerrorFlags;
+uint32_t SIM100MODtemp;
+uint16_t batteryVoltage;
 
-// ── SIM100MOD isolation monitor ──────────────────────────────────────────────
-extern uint16_t SIM100MODohmsPerVolt;
-extern uint16_t SIM100MODRpKohms;
-extern uint16_t SIM100MODRnKohms;
-extern uint16_t SIM100MODCpnF;
-extern uint16_t SIM100MODCnnF;
-extern uint16_t SIM100MODVp;
-extern uint16_t SIM100MODVn;
-extern uint16_t SIM100MODVb;
-extern uint16_t SIM100MODVbMax;
-extern uint8_t  SIMM100MODerrorFlags;
-extern uint32_t SIM100MODtemp;
-extern uint16_t batteryVoltage;
-
-// ── OpenInverter Tesla LDU V2 ────────────────────────────────────────────────
+// OpenInverter Tesla LDU V2 (CAN2 @ 500kbps)
+//
+// From firmware v5.32 the control frame has a FIXED bit-packed layout (not
+// freely mappable). Configure the inverter terminal once:
+//   potmode    2       (enable CAN throttle)
+//   potmin     0
+//   potmax     4095
+//   controlid  513     (= 0x201 in decimal)
+//   controlcheck 0     (disable CRC — implement later)
+//   save
+//
+// Fixed control frame layout (8 bytes, little-endian packed):
+//   data[0] bits  0-11 : pot          (12-bit throttle, 0-4095)
+//   data[0] bits 12-23 : pot2         (12-bit regen channel, 0 = not used)
+//   data[0] bits 24-29 : canio        (6-bit digital IO, see below)
+//   data[0] bits 30-31 : ctr1         (2-bit sequence counter)
+//   data[1] bits  0-13 : cruisespeed  (14-bit, 0 = not used)
+//   data[1] bits 14-15 : ctr2         (must equal ctr1 every frame)
+//   data[1] bits 16-23 : regenpreset  (8-bit regen %, 0 = not used)
+//   data[1] bits 24-31 : crc          (8-bit, ignored when controlcheck=0)
+//
+// canio bits (6-bit field, bits 24-29 of data[0]):
+//   bit 0 (0x01) = cruise
+//   bit 1 (0x02) = start / enable
+//   bit 2 (0x04) = brake
+//   bit 3 (0x08) = forward
+//   bit 4 (0x10) = reverse
+//   bit 5 (0x20) = bms
+//
+// Safety: ctr1 must equal ctr2 AND differ from the previous frame's counter.
+// After 5 consecutive invalid frames the inverter shuts down.
+// t0 increments the counter each 10ms tick — well within the 500ms timeout.
+//
+// RX from LDU: TODO confirm actual IDs from inverter 'can tx' terminal output
 #define LDU_CMD_ID          0x201
+
+// canio 6-bit field definitions
 #define LDU_CANIO_CRUISE    (1 << 0)
 #define LDU_CANIO_START     (1 << 1)
 #define LDU_CANIO_BRAKE     (1 << 2)
 #define LDU_CANIO_FORWARD   (1 << 3)
 #define LDU_CANIO_REVERSE   (1 << 4)
 #define LDU_CANIO_BMS       (1 << 5)
+
+// Internal direction state (set by keypad, translated to canio bits at transmit)
 #define LDU_DIR_NEUTRAL     0
 #define LDU_DIR_FORWARD     1
 #define LDU_DIR_REVERSE     2
 #define LDU_DIR_STOP        3
 
-extern int32_t  LDUrpm;
-extern int16_t  LDUtorque;
-extern int16_t  LDUtorqueSetpoint;
-extern int16_t  LDUspeedLimit;
-extern int16_t  LDUregenLimit;
-extern uint8_t  LDUdirection;
-extern uint8_t  LDUseqCounter;
-extern int16_t  LDUmotorTemp;
-extern int16_t  LDUinverterTemp;
-extern uint16_t LDUdcVoltage;
-extern uint16_t LDUstatus;
-extern uint16_t LDUfaults;
+int32_t  LDUrpm;                    // motor speed (RPM)
+int16_t  LDUtorque;                 // actual torque (Nm)
+int16_t  LDUtorqueSetpoint = 0;     // throttle demand 0–100 % — written by readThrottle(), read by t0
+int16_t  LDUspeedLimit     = 6000;  // max RPM — TODO: map via separate CAN rx if needed
+int16_t  LDUregenLimit     = 0;     // regen limit — TODO: implement
+uint8_t  LDUdirection      = LDU_DIR_NEUTRAL; // internal direction state, set by keypad
+uint8_t  LDUseqCounter     = 0;     // 2-bit sequence counter; incremented each t0 tick
+int16_t  LDUmotorTemp;              // motor temperature (°C × 10)
+int16_t  LDUinverterTemp;           // inverter temperature (°C × 10)
+uint16_t LDUdcVoltage;              // DC bus voltage (V × 10)
+uint16_t LDUstatus;                 // status bitfield
+uint16_t LDUfaults;                 // fault bitfield
 
-// ── BMW i4/i5/i7/iX Changeover Valve 64119462114 ────────────────────────────
-#define LIN_BAUD      19200
-#define LIN_VALVE_ID  0x10
+// BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial3
+// Serial3 hardware pins on Teensy 4.1: TX3=pin14 (A0), RX3=pin15 (A1)
+// SK Pang board GNSS UART is on Serial2 (pins 7/8) — Serial3 is free for LIN.
+// TODO: confirm LIN node ID and full frame spec from BMW service docs
+#define LIN_BAUD      19200     // LIN 2.x
+#define LIN_VALVE_ID  0x10      // TODO: confirm BMW LIN node address
+// #define LIN_EN_PIN ?         // TODO: assign LIN transceiver enable pin
+uint8_t  valvePosition = 0;     // last commanded position (encoding TBD)
+uint8_t  valveStatus   = 0;     // last reported status byte
+bool     valveOnline   = false; // true once first valid response received
 
-extern uint8_t  valvePosition;
-extern uint8_t  valveStatus;
-extern bool     valveOnline;
-
-// ── EMP WP29-12V-CV-A Smart Flow Water Pump ──────────────────────────────────
-#define EMP_WP29_ADDR    0x8Au
-#define VCU_CAN_ADDR     0xA3u
+// EMP WP29-12V-CV-A Smart Flow Water Pump — EMP proprietary protocol (9980001068 Rev. N)
+// Two pumps, same J1939 address (0x8A), on separate buses:
+//   Inverter cooling loop: CAN2 @ 500kbps
+//   Battery cooling loop:  CAN1 @ 500kbps
+// Command (VCU → pump): TX ID = 0x18EF{pump_addr}{vcu_addr}
+//   byte 0: 0xFD = Motor On (fwd) + DNC Power Hold; 0xFC = Motor Off + DNC
+//   byte 3: %speed × 2 (0.5 %/bit); bytes 1-2, 4-7: 0xFF. Must send ≥ 1 Hz.
+// Status (pump → VCU): Motor Status Message 1 @ 0x18FF03{pump_addr} (1 Hz)
+//   byte 0: bits[1:0]=direction, bits[5:2]=controller_status, bits[7:6]=command_src
+//   bytes 1-2: measured speed (little-endian uint16, 0.5 rpm/bit)
+//   bytes 3-4: external temp (little-endian int16, 0.03125 °C/bit, offset −273)
+//   bytes 5-6: motor power (little-endian uint16, 0.5 W/bit)
+//   byte 7: bits[1:0]=service_indicator, bits[3:2]=operation_status
+// Motor Status Message 3 @ 0x18FF24{pump_addr} (100 ms): voltage, current, HVIL
+#define EMP_WP29_ADDR    0x8Au   // pump J1939 source address — both pumps share this address (separate buses)
+#define VCU_CAN_ADDR     0xA3u   // VCU J1939 source address
 #define EMP_WP29_CMD_ID  (0x18EF0000UL | ((uint32_t)EMP_WP29_ADDR << 8) | VCU_CAN_ADDR)
-#define EMP_WP29_STATUS1 (0x18FF0300UL | EMP_WP29_ADDR)
-#define EMP_WP29_STATUS3 (0x18FF2400UL | EMP_WP29_ADDR)
+#define EMP_WP29_STATUS1 (0x18FF0300UL | EMP_WP29_ADDR)  // Motor Status Message 1 (1 Hz) — confirmed via DBC
+#define EMP_WP29_STATUS3 (0x18FF2400UL | EMP_WP29_ADDR)  // Motor Status Message 3 (100 ms)
+// Inverter cooling pump (CAN2)
+uint16_t invPumpSpeed    = 0;  // raw measured speed (0.5 rpm/bit)
+uint8_t  invPumpStatus   = 0;  // controller status nibble (byte 0 bits[5:2])
+uint8_t  invPumpFaults   = 0;  // service indicator [1:0] + operation status [3:2] (byte 7)
+uint8_t  invPumpSetpoint = 0;  // commanded speed 0–100 %
+// Battery cooling pump (CAN1)
+uint16_t battPumpSpeed    = 0;
+uint8_t  battPumpStatus   = 0;
+uint8_t  battPumpFaults   = 0;
+uint8_t  battPumpSetpoint = 0;
 
-extern uint16_t invPumpSpeed;
-extern uint8_t  invPumpStatus;
-extern uint8_t  invPumpFaults;
-extern uint8_t  invPumpSetpoint;
-extern uint16_t battPumpSpeed;
-extern uint8_t  battPumpStatus;
-extern uint8_t  battPumpFaults;
-extern uint8_t  battPumpSetpoint;
-
-// ── Advantics ADM-CS-EVCC ─────────────────────────────────────────────────────
-#define EVCC_NEW_SESSION    0x68001u
-#define EVCC_INS_TEST       0x68002u
-#define EVCC_PRECHARGE      0x68003u
-#define EVCC_STATUS_CHANGE  0x68004u
-#define EVCC_CHARGING_LOOP  0x68005u
-#define EVCC_EMERG_STOP     0x68006u
-#define EVCC_SESSION_END    0x68007u
-#define EVCC_CTRL_STATUS    0x68009u
-#define EVCC_PWR_STATUS     0x60010u
-#define EVCC_PWR_LIMITS     0x60011u
-#define EVCC_SEQ_CTRL       0x60012u
-#define EVCC_EVSE_INFO      0x600u
-#define EVCC_AC_CTRL        0x601u
-#define EVCC_AC_STATUS      0x611u
-#define EVCC_PLUG_CCS_DC_CORE  0u
-#define EVCC_PLUG_CCS_DC_EXT   1u
-#define EVCC_PLUG_CHADEMO      2u
+// Advantics ADM-CS-EVCC DC Fast Charge Controller (CAN2 @ 500kbps)
+// Generic Power Modules protocol — 29-bit extended IDs (DBC raw values have bit 31 set).
+// EVCC drives DCFC contactors autonomously via its own hardware outputs.
+// DCFC inlet connects directly to battery pack — independent of main pack contactors (PDU-8).
+//
+// Received from EVCC (EVCC → VCU, extended IDs)
+#define EVCC_NEW_SESSION    0x68001u  // New_Charge_Session: Protocol(8b), Plug_and_pins(8b), EV_Max_V(16b 0.1V), EV_Max_I(16b 0.1A), Capacity(8b 2kWh), SoC(8b %)
+#define EVCC_INS_TEST       0x68002u  // Insulation_Test — informational
+#define EVCC_PRECHARGE      0x68003u  // Precharge — informational
+#define EVCC_STATUS_CHANGE  0x68004u  // Charge_Status_Change: Vehicle_Ready_for_Charging(8b)
+#define EVCC_CHARGING_LOOP  0x68005u  // Charging_Loop: Target_V(16b 0.1V LE), Target_I(16b s 0.1A LE), SoC(8b %)
+#define EVCC_EMERG_STOP     0x68006u  // Emergency_Stop: Origin(8b)
+#define EVCC_SESSION_END    0x68007u  // Charge_Session_Finished: State(8b)
+#define EVCC_CTRL_STATUS    0x68009u  // Advantics_Controller_Status: State(8b) — 200ms heartbeat
+//
+// Sent by VCU (VCU → EVCC, extended IDs, every 62.5ms)
+#define EVCC_PWR_STATUS     0x60010u  // Power_Modules_Status: Present_V(16b 0.1V LE), Present_I(16b s 0.1A LE), Reserved(16b), System_Enable(8b), Insulation_R(8b 2kΩ/bit)
+#define EVCC_PWR_LIMITS     0x60011u  // Power_Modules_Limits: Max_V(16b 0.1V LE), Max_I(16b s 0.1A LE), Reserved(32b)
+#define EVCC_SEQ_CTRL       0x60012u  // Sequence_Control: Start_Auth(b0), CHAdeMO_Btn(b1) | CCS_Done(b0), CCS_Valid(b1), Params_Done(b2) | User_Stop(b0)
+//
+// Advantics v2.5 PEV protocol — standard 11-bit IDs (AC handshake, coexists with extended-ID protocol)
+#define EVCC_EVSE_INFO      0x600u    // EVSE_Information: Stage(b0), Protocol(b1), Pins(b2), Max_I(b3:4 s A), RCD(b5.0) — received from EVCC
+#define EVCC_AC_CTRL        0x601u    // AC_Control: Ready_To_Deliver_Power(b0) — received from EVCC
+#define EVCC_AC_STATUS      0x611u    // AC_Status: Ready_To_Charge(b0) — sent by VCU every 62.5ms
+//
+// Plug_and_pins values (New_Charge_Session 0x68001 byte 1, old extended-ID protocol)
+#define EVCC_PLUG_CCS_DC_CORE  0u  // CCS DC Core (DIN 70121 / ISO 15118 basic)
+#define EVCC_PLUG_CCS_DC_EXT   1u  // CCS DC Extended
+#define EVCC_PLUG_CHADEMO      2u  // CHAdeMO
+// True for all defined DC plug types; any other value is treated as AC.
 #define EVCC_PLUG_IS_DC(p) ((p) == EVCC_PLUG_CCS_DC_CORE || \
                             (p) == EVCC_PLUG_CCS_DC_EXT  || \
                             (p) == EVCC_PLUG_CHADEMO)
-#define EVCC_PINS_CCS_AC       1u
-#define EVCC_PINS_CCS_AC_1PH   2u
-#define EVCC_PINS_CCS_AC_3PH   3u
+//
+// Pins values (EVSE_Information 0x600 byte 1, v2.5 standard-ID protocol)
+#define EVCC_PINS_CCS_AC       1u   // AC (generic)
+#define EVCC_PINS_CCS_AC_1PH   2u   // AC single-phase core
+#define EVCC_PINS_CCS_AC_3PH   3u   // AC three-phase core
 #define EVCC_PINS_CCS_DC_CORE  4u
 #define EVCC_PINS_CCS_DC_EXT   5u
 #define EVCC_PINS_MCS          6u
 #define EVCC_PINS_IS_AC(p)     ((p) >= 1u && (p) <= 3u)
-#define EVCC_MAX_VOLTAGE_x10  4200u
-#define EVCC_MAX_CURRENT_x10  1000u
-#define EVCC_CELL_V_EMPTY  39322u
-#define EVCC_CELL_V_FULL   47841u
+//
+// Battery charge limits — TODO: calibrate for actual pack configuration
+#define EVCC_MAX_VOLTAGE_x10  4200u  // 420.0 V pack maximum (0.1V units)
+#define EVCC_MAX_CURRENT_x10  1000u  // 100.0 A maximum charge current (0.1A units)
+// pMBB32 cell voltage thresholds (16-bit ADC, 5 V ref → 1 count ≈ 76.3 µV)
+#define EVCC_CELL_V_EMPTY  39322u  // ≈ 3.0 V — 0 % SoC reference (TODO: calibrate for cell chemistry)
+#define EVCC_CELL_V_FULL   47841u  // ≈ 3.65 V — 100 % SoC (TODO: calibrate)
+//
+uint8_t  EVCCstage          = 0;     // Advantics_Controller_Status.State from 0x68009
+uint8_t  EVCCplugType       = 0;     // Plug_and_pins from New_Charge_Session
+bool     EVCCsessionActive  = false; // true from New_Charge_Session until Finished/Emergency
+bool     EVCCemergencyStop  = false; // set on Emergency_Stop received
+bool     EVCCsystemEnable   = false; // VCU authorisation flag → drives System_Enable in Power_Modules_Status
+bool     normalEndOfCharge  = false; // set when highestCellV ≥ EVCC_CELL_V_FULL
 
-extern uint8_t  EVCCstage;
-extern uint8_t  EVCCplugType;
-extern bool     EVCCsessionActive;
-extern bool     EVCCemergencyStop;
-extern bool     EVCCsystemEnable;
-extern bool     normalEndOfCharge;
+uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
+uint16_t rpm = 0;
+uint16_t power = 0;
+uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
 
-// ── Keypad / drive state ──────────────────────────────────────────────────────
-extern uint8_t  keypadStatus;
-extern uint16_t rpm;
-extern uint16_t power;
-extern uint16_t throttle;
+// EVWest dual pot throttle (OEM pedal) — read via ADS1115 on I2C0
+#define ADS_CH_THROTTLE1        0   // ADS1115 AIN0 — throttle pot 1
+#define ADS_CH_THROTTLE2        1   // ADS1115 AIN1 — throttle pot 2
+#define ADS_CH_BRAKE            2   // ADS1115 AIN2 — brake pedal
+// Calibration endpoints in ADS1115 counts (GAIN_ONE ±4.096 V, int16_t 0–32767 for 0–4.096 V)
+// Values below are ×8 approximations of the old 12-bit values — TODO: bench calibrate
+#define THROTTLE_POT1_MIN       800
+#define THROTTLE_POT1_MAX       31200
+#define THROTTLE_POT2_MIN       800
+#define THROTTLE_POT2_MAX       31200
+#define THROTTLE_PLAUSIBILITY_PCT 5   // max allowable % difference between tracks
+#define THROTTLE_FAULT_LIMIT    20    // max throttle % permitted when IVT or SIM fault active
+#define BRAKE_THRESHOLD         1600  // ADS1115 counts — TODO: bench calibrate
+#define PRECHARGE_TIMEOUT_MS    2000  // pre-charge relay must raise U2 to ≥95% of U1 within this window
+uint16_t throttlePot1Raw;             // ADS1115 AIN0 count, track 1 (updated in loop())
+uint16_t throttlePot2Raw;             // ADS1115 AIN1 count, track 2 (updated in loop())
+int16_t  brakeRaw = 0;                // ADS1115 AIN2 count (updated in loop())
+bool     throttlePlausibility = true; // false = tracks disagree → throttle forced to 0
+bool     brakePedal           = false;// true when brake pedal is pressed
+bool     regenActive          = false;// true when LDU torque is negative and motor is spinning
+bool     IVTfaultActive       = false;// set in can2Sniff on overcurrent / overvoltage
+uint32_t preChargeStartTime   = 0;   // millis() when PreCharge state was entered
+bool     chargeMode           = false;// true for AC charge session — routes pre-charge to Charge state (TODO: set from EVCC_NEW_SESSION when AC plug type detected)
+bool     reducedPowerActive   = false;// true when BMS temp fault limits available power
+uint16_t groundSpeed = 0;
+uint32_t GPSaltitude = 0;
+uint8_t fixType;
+bool KL17state;
+bool KL15state = false;  // true when keypad button 5 (KL15/Ignition) is active
 
-// ── EVWest dual pot throttle ──────────────────────────────────────────────────
-#define ADS_CH_THROTTLE1          0
-#define ADS_CH_THROTTLE2          1
-#define ADS_CH_BRAKE              2
-#define THROTTLE_POT1_MIN         800
-#define THROTTLE_POT1_MAX         31200
-#define THROTTLE_POT2_MIN         800
-#define THROTTLE_POT2_MAX         31200
-#define THROTTLE_PLAUSIBILITY_PCT 5
-#define THROTTLE_FAULT_LIMIT      20
-#define BRAKE_THRESHOLD           1600
-#define PRECHARGE_TIMEOUT_MS      2000
+uint16_t debounceDelay = 250;//debounce time (ms)
+uint8_t button_0x01_state;
+uint8_t button_0x02_state;
+uint8_t button_0x04_state;
+uint8_t button_0x08_state;
+uint8_t button_0x10_state;
+uint8_t button_0x20_state;
+uint8_t button_0x40_state;
+uint8_t button_0x80_state;
+uint8_t new_0x01_state;
+uint8_t new_0x02_state;
+uint8_t new_0x04_state;
+uint8_t new_0x08_state;
+uint8_t new_0x10_state;
+uint8_t new_0x20_state;
+uint8_t new_0x40_state;
+uint8_t new_0x80_state;
+uint8_t last_0x01_state;
+uint8_t last_0x02_state;
+uint8_t last_0x04_state;
+uint8_t last_0x08_state;
+uint8_t last_0x10_state;
+uint8_t last_0x20_state;
+uint8_t last_0x40_state;
+uint8_t last_0x80_state;
+uint8_t  last_0x01_time;
+uint8_t  last_0x02_time;
+uint8_t  last_0x04_time;
+uint8_t  last_0x08_time;
+uint32_t last_0x10_time;  // uint32_t — holds millis() for debounce
+uint8_t  last_0x20_time;
+uint8_t  last_0x40_time;
+uint8_t  last_0x80_time;
 
-extern uint16_t throttlePot1Raw;
-extern uint16_t throttlePot2Raw;
-extern int16_t  brakeRaw;
-extern bool     throttlePlausibility;
-extern bool     brakePedal;
-extern bool     regenActive;
-extern bool     IVTfaultActive;
-extern uint32_t preChargeStartTime;
-extern bool     chargeMode;
-extern bool     reducedPowerActive;
+char ReplyBuffer[] = "acknowledged";
+uint8_t displayBuffer[16];
 
-// ── GPS / GNSS ────────────────────────────────────────────────────────────────
-extern uint16_t groundSpeed;
-extern uint32_t GPSaltitude;
-extern uint8_t  fixType;
+unsigned int digitalPins = 0;
+int analogPins[7] = {0};
 
-// ── KL signals ───────────────────────────────────────────────────────────────
-extern bool KL17state;
-extern bool KL15state;
+void displayStatus();
 
-// ── Button debounce ───────────────────────────────────────────────────────────
-extern uint16_t debounceDelay;
-extern uint8_t  button_0x01_state, button_0x02_state, button_0x04_state, button_0x08_state;
-extern uint8_t  button_0x10_state, button_0x20_state, button_0x40_state, button_0x80_state;
-extern uint8_t  new_0x01_state, new_0x02_state, new_0x04_state, new_0x08_state;
-extern uint8_t  new_0x10_state, new_0x20_state, new_0x40_state, new_0x80_state;
-extern uint8_t  last_0x01_state, last_0x02_state, last_0x04_state, last_0x08_state;
-extern uint8_t  last_0x10_state, last_0x20_state, last_0x40_state, last_0x80_state;
-extern uint8_t  last_0x01_time, last_0x02_time, last_0x04_time, last_0x08_time;
-extern uint32_t last_0x10_time;
-extern uint8_t  last_0x20_time, last_0x40_time, last_0x80_time;
+void can1Sniff(const CAN_message_t);
+void can2Sniff(const CAN_message_t);
+void can3Sniff(const CAN_message_t);
 
-// ── Legacy / unused ───────────────────────────────────────────────────────────
-extern char         ReplyBuffer[];
-extern uint8_t      displayBuffer[16];
-extern unsigned int digitalPins;
-extern int          analogPins[7];
-extern byte         buf[8];
-extern unsigned int kpa, tps, clt, textCounter;
+void initCAN (int, int, int);
+void wakepMBB32();
+void shutdownpMBB32();
+
+void ReadDigitalStatuses();
+void ReadAnalogStatuses();
+void linInit();
+void linReadValve();
+void linWriteValve(uint8_t position);
+void readThrottle();
+
+void check_KL15();
+void check_PreCharge();
+void check_Idle();
+void check_DriveState();
+void check_Charge();
+void check_Fault();
+void check_HeatPack();
+void check_CoolPack();
+void Off_enter();
+void Off_exit();
+void PreCharge_enter();
+void PreCharge_exit();
+void Idle_enter();
+void Idle_exit();
+void Drive_enter();
+void Drive_exit();
+void Charge_enter();
+void Charge_exit();
+void Fault_enter();
+void Fault_exit();
+void HeatPack_enter();
+void HeatPack_exit();
+void CoolPack_enter();
+void CoolPack_exit();
+void on_trans_Off_PreCharge();
+void on_trans_PreCharge_Idle();
+void on_trans_PreCharge_Charge();
+void on_trans_PreCharge_Fault();
+void on_trans_Fault_Off();
+void KL30C_enter();
+void check_KL30C();
+void KL30C_exit();
+void enterSleep();
+
+byte buf[8];
+
+unsigned int kpa = 992; // 99.2
+unsigned int tps = 965; // 96.5
+unsigned int clt = 80;  // 80 - 100
+unsigned int textCounter = 0;
+//uint16_t packV = 0;
+//uint16_t packA = 0;
+
