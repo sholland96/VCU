@@ -24,6 +24,18 @@ extern VCUStateEnum VCUstate; // defined in main.cpp
 extern FlexCAN_T4<CAN3, RX_SIZE_256, TX_SIZE_16> can3;
 extern CAN_message_t msg3;
 
+#include <TeensyTimerTool.h>
+// Shared timer objects — defined in main.cpp.
+extern IntervalTimer t0;
+extern TeensyTimerTool::PeriodicTimer t1, t2, t3;
+
+#define KL15R_PIN 2  // physical key position 1 (accessory) — wakes hardware, no FSM role
+
+// DMAMEM places sleepMagic in OCRAM (.bss.dma, NOLOAD): valid writable RAM, not zeroed by CRT
+// startup, survives AIRCR reset. Used in enterSleep() and setup() to detect CAN-wake vs key-on.
+extern volatile uint32_t sleepMagic;
+#define SLEEP_MAGIC_CAN_WAKE 0xC4A8B3E1UL
+
 #define KEYPAD_COLOR_OFF          0
 #define KEYPAD_COLOR_RED          1
 #define KEYPAD_COLOR_GREEN        2
