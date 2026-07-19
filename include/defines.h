@@ -1,5 +1,7 @@
 /* defines.h
 *
+* Macros, types, and extern declarations. Actual variable/object
+* definitions with their initializers live in globals.cpp.
 */
 
 typedef enum {
@@ -13,6 +15,8 @@ typedef enum {
   VCU_STATE_FAULT,
   VCU_STATE_KL30C   // external CAN wake (EVCC/gateway) with KL15R low
 } VCUStateEnum;
+
+extern VCUStateEnum VCUstate; // defined in main.cpp
 
 #define KEYPAD_COLOR_OFF          0
 #define KEYPAD_COLOR_RED          1
@@ -73,7 +77,7 @@ typedef enum {
 // Gain: GAIN_ONE (±4.096 V) — suitable for 3.3V-referenced sensors.
 // If sensors are 5V-referenced change to GAIN_TWOTHIRDS (±6.144 V) and re-calibrate.
 #include <Adafruit_ADS1X15.h>
-Adafruit_ADS1115 ads;
+extern Adafruit_ADS1115 ads;
 #define ADS1115_ADDR  0x48
 
 #ifdef UBLOX_GNSS
@@ -108,70 +112,70 @@ Adafruit_ADS1115 ads;
 #define SIM7080_BAUD      115200
 #define SIM7080_PWRKEY    36    // pulse LOW ~1 s to power on module
 
-SFE_UBLOX_GNSS myGNSS;
+extern SFE_UBLOX_GNSS myGNSS;
 #endif
 
-uint8_t pMBB32stale1;
-uint8_t pMBB32stale2;
-uint8_t pMBB32stale3;
-uint8_t pMBB32staleMax;
-uint32_t lastUpdatePMBB1 = 0;
-uint32_t lastUpdatePMBB2 = 0;
-uint32_t lastUpdatePMBB3 = 0;
+extern uint8_t pMBB32stale1;
+extern uint8_t pMBB32stale2;
+extern uint8_t pMBB32stale3;
+extern uint8_t pMBB32staleMax;
+extern uint32_t lastUpdatePMBB1;
+extern uint32_t lastUpdatePMBB2;
+extern uint32_t lastUpdatePMBB3;
 
-uint8_t counter = 0;
+extern uint8_t counter;
 
-float ADCres = 0.000076293945;
+extern float ADCres;
 
-uint8_t serialBlockTag[] = {0x44,0x33,0x22,0x11};
-uint8_t frameID[] = {0x0c,0x08};
+extern uint8_t serialBlockTag[];
+extern uint8_t frameID[];
 
-uint8_t who;
-uint32_t temp;
-uint8_t minCell1;
-uint8_t maxCell1;
-uint8_t minCell2;
-uint8_t maxCell2;
-uint8_t minCell3;
-uint8_t maxCell3;
-uint8_t minModule1;
-uint8_t maxModule1;
-uint8_t minModule2;
-uint8_t maxModule2;
-uint8_t minModule3;
-uint8_t maxModule3;
-uint16_t minCellV1 = 0xFFFF;
-uint16_t maxCellV1 = 0;
-uint16_t minCellV2 = 0xFFFF;
-uint16_t maxCellV2 = 0;
-uint16_t minCellV3 = 0xFFFF;
-uint16_t maxCellV3 = 0;
-uint16_t lowestCellV;
-uint16_t lowestCell;
-uint16_t lowestModule;
-uint16_t highestCellV;
-uint16_t highestCell;
-uint16_t highestModule;
-int32_t IVTpackCurrent;//1mA resolution, signed (negative = discharge)
-int32_t IVTpackVoltage;//1mV resolution
-int32_t IVTpreChargeV;//1mV resolution
-int32_t IVTvoltage3;//1mV resolution
-int32_t IVTtemp;//0.1°C resolution, signed
-int32_t IVTpower;//1W resolution, signed (negative = regen)
-int32_t IVTcoulombCounter;//1As resolution, signed
-int32_t IVTenergyCounter;//1Wh resolution, signed
-uint16_t SIM100MODohmsPerVolt;
-uint16_t SIM100MODRpKohms;
-uint16_t SIM100MODRnKohms;
-uint16_t SIM100MODCpnF;
-uint16_t SIM100MODCnnF;
-uint16_t SIM100MODVp;
-uint16_t SIM100MODVn;
-uint16_t SIM100MODVb;
-uint16_t SIM100MODVbMax;
-uint8_t SIMM100MODerrorFlags;
-uint32_t SIM100MODtemp;
-uint16_t batteryVoltage;
+extern uint8_t who;
+extern uint32_t temp;
+extern uint8_t minCell1;
+extern uint8_t maxCell1;
+extern uint8_t minCell2;
+extern uint8_t maxCell2;
+extern uint8_t minCell3;
+extern uint8_t maxCell3;
+extern uint8_t minModule1;
+extern uint8_t maxModule1;
+extern uint8_t minModule2;
+extern uint8_t maxModule2;
+extern uint8_t minModule3;
+extern uint8_t maxModule3;
+extern uint16_t minCellV1;
+extern uint16_t maxCellV1;
+extern uint16_t minCellV2;
+extern uint16_t maxCellV2;
+extern uint16_t minCellV3;
+extern uint16_t maxCellV3;
+extern uint16_t lowestCellV;
+extern uint16_t lowestCell;
+extern uint16_t lowestModule;
+extern uint16_t highestCellV;
+extern uint16_t highestCell;
+extern uint16_t highestModule;
+extern int32_t IVTpackCurrent;//1mA resolution, signed (negative = discharge)
+extern int32_t IVTpackVoltage;//1mV resolution
+extern int32_t IVTpreChargeV;//1mV resolution
+extern int32_t IVTvoltage3;//1mV resolution
+extern int32_t IVTtemp;//0.1°C resolution, signed
+extern int32_t IVTpower;//1W resolution, signed (negative = regen)
+extern int32_t IVTcoulombCounter;//1As resolution, signed
+extern int32_t IVTenergyCounter;//1Wh resolution, signed
+extern uint16_t SIM100MODohmsPerVolt;
+extern uint16_t SIM100MODRpKohms;
+extern uint16_t SIM100MODRnKohms;
+extern uint16_t SIM100MODCpnF;
+extern uint16_t SIM100MODCnnF;
+extern uint16_t SIM100MODVp;
+extern uint16_t SIM100MODVn;
+extern uint16_t SIM100MODVb;
+extern uint16_t SIM100MODVbMax;
+extern uint8_t SIMM100MODerrorFlags;
+extern uint32_t SIM100MODtemp;
+extern uint16_t batteryVoltage;
 
 // OpenInverter Tesla LDU V2 (CAN2 @ 500kbps)
 //
@@ -223,18 +227,18 @@ uint16_t batteryVoltage;
 #define LDU_DIR_REVERSE     2
 #define LDU_DIR_STOP        3
 
-int32_t  LDUrpm;                    // motor speed (RPM)
-int16_t  LDUtorque;                 // actual torque (Nm)
-int16_t  LDUtorqueSetpoint = 0;     // throttle demand 0–100 % — written by readThrottle(), read by t0
-int16_t  LDUspeedLimit     = 6000;  // max RPM — TODO: map via separate CAN rx if needed
-int16_t  LDUregenLimit     = 0;     // regen limit — TODO: implement
-uint8_t  LDUdirection      = LDU_DIR_NEUTRAL; // internal direction state, set by keypad
-uint8_t  LDUseqCounter     = 0;     // 2-bit sequence counter; incremented each t0 tick
-int16_t  LDUmotorTemp;              // motor temperature (°C × 10)
-int16_t  LDUinverterTemp;           // inverter temperature (°C × 10)
-uint16_t LDUdcVoltage;              // DC bus voltage (V × 10)
-uint16_t LDUstatus;                 // status bitfield
-uint16_t LDUfaults;                 // fault bitfield
+extern int32_t  LDUrpm;                    // motor speed (RPM)
+extern int16_t  LDUtorque;                 // actual torque (Nm)
+extern int16_t  LDUtorqueSetpoint;         // throttle demand 0–100 % — written by readThrottle(), read by t0
+extern int16_t  LDUspeedLimit;             // max RPM — TODO: map via separate CAN rx if needed
+extern int16_t  LDUregenLimit;             // regen limit — TODO: implement
+extern uint8_t  LDUdirection;              // internal direction state, set by keypad
+extern uint8_t  LDUseqCounter;             // 2-bit sequence counter; incremented each t0 tick
+extern int16_t  LDUmotorTemp;              // motor temperature (°C × 10)
+extern int16_t  LDUinverterTemp;           // inverter temperature (°C × 10)
+extern uint16_t LDUdcVoltage;              // DC bus voltage (V × 10)
+extern uint16_t LDUstatus;                 // status bitfield
+extern uint16_t LDUfaults;                 // fault bitfield
 
 // BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial3
 // Serial3 hardware pins on Teensy 4.1: TX3=pin14 (A0), RX3=pin15 (A1)
@@ -243,9 +247,9 @@ uint16_t LDUfaults;                 // fault bitfield
 #define LIN_BAUD      19200     // LIN 2.x
 #define LIN_VALVE_ID  0x10      // TODO: confirm BMW LIN node address
 // #define LIN_EN_PIN ?         // TODO: assign LIN transceiver enable pin
-uint8_t  valvePosition = 0;     // last commanded position (encoding TBD)
-uint8_t  valveStatus   = 0;     // last reported status byte
-bool     valveOnline   = false; // true once first valid response received
+extern uint8_t  valvePosition; // last commanded position (encoding TBD)
+extern uint8_t  valveStatus;   // last reported status byte
+extern bool     valveOnline;   // true once first valid response received
 
 // EMP WP29-12V-CV-A Smart Flow Water Pump — EMP proprietary protocol (9980001068 Rev. N)
 // Two pumps, same J1939 address (0x8A), on separate buses:
@@ -267,15 +271,15 @@ bool     valveOnline   = false; // true once first valid response received
 #define EMP_WP29_STATUS1 (0x18FF0300UL | EMP_WP29_ADDR)  // Motor Status Message 1 (1 Hz) — confirmed via DBC
 #define EMP_WP29_STATUS3 (0x18FF2400UL | EMP_WP29_ADDR)  // Motor Status Message 3 (100 ms)
 // Inverter cooling pump (CAN2)
-uint16_t invPumpSpeed    = 0;  // raw measured speed (0.5 rpm/bit)
-uint8_t  invPumpStatus   = 0;  // controller status nibble (byte 0 bits[5:2])
-uint8_t  invPumpFaults   = 0;  // service indicator [1:0] + operation status [3:2] (byte 7)
-uint8_t  invPumpSetpoint = 0;  // commanded speed 0–100 %
+extern uint16_t invPumpSpeed;    // raw measured speed (0.5 rpm/bit)
+extern uint8_t  invPumpStatus;   // controller status nibble (byte 0 bits[5:2])
+extern uint8_t  invPumpFaults;   // service indicator [1:0] + operation status [3:2] (byte 7)
+extern uint8_t  invPumpSetpoint; // commanded speed 0–100 %
 // Battery cooling pump (CAN1)
-uint16_t battPumpSpeed    = 0;
-uint8_t  battPumpStatus   = 0;
-uint8_t  battPumpFaults   = 0;
-uint8_t  battPumpSetpoint = 0;
+extern uint16_t battPumpSpeed;
+extern uint8_t  battPumpStatus;
+extern uint8_t  battPumpFaults;
+extern uint8_t  battPumpSetpoint;
 
 // Advantics ADM-CS-EVCC DC Fast Charge Controller (CAN2 @ 500kbps)
 // Generic Power Modules protocol — 29-bit extended IDs (DBC raw values have bit 31 set).
@@ -327,17 +331,17 @@ uint8_t  battPumpSetpoint = 0;
 #define EVCC_CELL_V_EMPTY  39322u  // ≈ 3.0 V — 0 % SoC reference (TODO: calibrate for cell chemistry)
 #define EVCC_CELL_V_FULL   47841u  // ≈ 3.65 V — 100 % SoC (TODO: calibrate)
 //
-uint8_t  EVCCstage          = 0;     // Advantics_Controller_Status.State from 0x68009
-uint8_t  EVCCplugType       = 0;     // Plug_and_pins from New_Charge_Session
-bool     EVCCsessionActive  = false; // true from New_Charge_Session until Finished/Emergency
-bool     EVCCemergencyStop  = false; // set on Emergency_Stop received
-bool     EVCCsystemEnable   = false; // VCU authorisation flag → drives System_Enable in Power_Modules_Status
-bool     normalEndOfCharge  = false; // set when highestCellV ≥ EVCC_CELL_V_FULL
+extern uint8_t  EVCCstage;          // Advantics_Controller_Status.State from 0x68009
+extern uint8_t  EVCCplugType;       // Plug_and_pins from New_Charge_Session
+extern bool     EVCCsessionActive;  // true from New_Charge_Session until Finished/Emergency
+extern bool     EVCCemergencyStop;  // set on Emergency_Stop received
+extern bool     EVCCsystemEnable;   // VCU authorisation flag → drives System_Enable in Power_Modules_Status
+extern bool     normalEndOfCharge;  // set when highestCellV ≥ EVCC_CELL_V_FULL
 
-uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
-uint16_t rpm = 0;
-uint16_t power = 0;
-uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
+extern uint8_t keypadStatus;// 0x01 = Park, 0x02 = Reverse, 0x03 = Neutral, 0x04 = Drive, 0x05 = Ignition, 0x06 = SpeedMode, 0x07 = AUX, 0x08 = DriveMode
+extern uint16_t rpm;
+extern uint16_t power;
+extern uint16_t throttle;  // 0–100 %, written by readThrottle(), consumed by displayStatus()
 
 // EVWest dual pot throttle (OEM pedal) — read via ADS1115 on I2C0
 #define ADS_CH_THROTTLE1        0   // ADS1115 AIN0 — throttle pot 1
@@ -353,61 +357,63 @@ uint16_t throttle = 0;  // 0–100 %, written by readThrottle(), consumed by dis
 #define THROTTLE_FAULT_LIMIT    20    // max throttle % permitted when IVT or SIM fault active
 #define BRAKE_THRESHOLD         1600  // ADS1115 counts — TODO: bench calibrate
 #define PRECHARGE_TIMEOUT_MS    2000  // pre-charge relay must raise U2 to ≥95% of U1 within this window
-uint16_t throttlePot1Raw;             // ADS1115 AIN0 count, track 1 (updated in loop())
-uint16_t throttlePot2Raw;             // ADS1115 AIN1 count, track 2 (updated in loop())
-int16_t  brakeRaw = 0;                // ADS1115 AIN2 count (updated in loop())
-bool     throttlePlausibility = true; // false = tracks disagree → throttle forced to 0
-bool     brakePedal           = false;// true when brake pedal is pressed
-bool     regenActive          = false;// true when LDU torque is negative and motor is spinning
-bool     IVTfaultActive       = false;// set in can2Sniff on overcurrent / overvoltage
-uint32_t preChargeStartTime   = 0;   // millis() when PreCharge state was entered
-bool     chargeMode           = false;// true for AC charge session — routes pre-charge to Charge state (TODO: set from EVCC_NEW_SESSION when AC plug type detected)
-bool     reducedPowerActive   = false;// true when BMS temp fault limits available power
-uint16_t groundSpeed = 0;
-uint32_t GPSaltitude = 0;
-uint8_t fixType;
-bool KL17state;
-bool KL15state = false;  // true when keypad button 5 (KL15/Ignition) is active
+extern uint16_t throttlePot1Raw;      // ADS1115 AIN0 count, track 1 (updated in loop())
+extern uint16_t throttlePot2Raw;      // ADS1115 AIN1 count, track 2 (updated in loop())
+extern int16_t  brakeRaw;             // ADS1115 AIN2 count (updated in loop())
+extern bool     throttlePlausibility; // false = tracks disagree → throttle forced to 0
+extern bool     brakePedal;           // true when brake pedal is pressed
+extern bool     regenActive;          // true when LDU torque is negative and motor is spinning
+extern bool     IVTfaultActive;       // set in can2Sniff on overcurrent / overvoltage
+extern uint32_t preChargeStartTime;   // millis() when PreCharge state was entered
+extern bool     chargeMode;           // true for AC charge session — routes pre-charge to Charge state (TODO: set from EVCC_NEW_SESSION when AC plug type detected)
+extern bool     reducedPowerActive;   // true when BMS temp fault limits available power
+extern uint16_t groundSpeed;
+extern uint32_t GPSaltitude;
+extern uint8_t fixType;
+extern bool KL17state;
+extern bool KL15state;  // true when keypad button 5 (KL15/Ignition) is active
 
-uint16_t debounceDelay = 250;//debounce time (ms)
-uint8_t button_0x01_state;
-uint8_t button_0x02_state;
-uint8_t button_0x04_state;
-uint8_t button_0x08_state;
-uint8_t button_0x10_state;
-uint8_t button_0x20_state;
-uint8_t button_0x40_state;
-uint8_t button_0x80_state;
-uint8_t new_0x01_state;
-uint8_t new_0x02_state;
-uint8_t new_0x04_state;
-uint8_t new_0x08_state;
-uint8_t new_0x10_state;
-uint8_t new_0x20_state;
-uint8_t new_0x40_state;
-uint8_t new_0x80_state;
-uint8_t last_0x01_state;
-uint8_t last_0x02_state;
-uint8_t last_0x04_state;
-uint8_t last_0x08_state;
-uint8_t last_0x10_state;
-uint8_t last_0x20_state;
-uint8_t last_0x40_state;
-uint8_t last_0x80_state;
-uint8_t  last_0x01_time;
-uint8_t  last_0x02_time;
-uint8_t  last_0x04_time;
-uint8_t  last_0x08_time;
-uint32_t last_0x10_time;  // uint32_t — holds millis() for debounce
-uint8_t  last_0x20_time;
-uint8_t  last_0x40_time;
-uint8_t  last_0x80_time;
+extern uint16_t debounceDelay;//debounce time (ms)
+extern uint8_t button_0x01_state;
+extern uint8_t button_0x02_state;
+extern uint8_t button_0x04_state;
+extern uint8_t button_0x08_state;
+extern uint8_t button_0x10_state;
+extern uint8_t button_0x20_state;
+extern uint8_t button_0x40_state;
+extern uint8_t button_0x80_state;
+extern uint8_t new_0x01_state;
+extern uint8_t new_0x02_state;
+extern uint8_t new_0x04_state;
+extern uint8_t new_0x08_state;
+extern uint8_t new_0x10_state;
+extern uint8_t new_0x20_state;
+extern uint8_t new_0x40_state;
+extern uint8_t new_0x80_state;
+extern uint8_t last_0x01_state;
+extern uint8_t last_0x02_state;
+extern uint8_t last_0x04_state;
+extern uint8_t last_0x08_state;
+extern uint8_t last_0x10_state;
+extern uint8_t last_0x20_state;
+extern uint8_t last_0x40_state;
+extern uint8_t last_0x80_state;
+extern uint8_t  last_0x01_time;
+extern uint8_t  last_0x02_time;
+extern uint8_t  last_0x04_time;
+extern uint8_t  last_0x08_time;
+extern uint32_t last_0x10_time;  // uint32_t — holds millis() for debounce
+extern uint8_t  last_0x20_time;
+extern uint8_t  last_0x40_time;
+extern uint8_t  last_0x80_time;
 
-char ReplyBuffer[] = "acknowledged";
-uint8_t displayBuffer[16];
+extern char ReplyBuffer[];
+extern uint8_t displayBuffer[16];
 
-unsigned int digitalPins = 0;
-int analogPins[7] = {0};
+extern unsigned int digitalPins;
+extern int analogPins[7];
+
+#include <FlexCAN_T4.h>
 
 void displayStatus();
 
@@ -460,12 +466,11 @@ void check_KL30C();
 void KL30C_exit();
 void enterSleep();
 
-byte buf[8];
+extern byte buf[8];
 
-unsigned int kpa = 992; // 99.2
-unsigned int tps = 965; // 96.5
-unsigned int clt = 80;  // 80 - 100
-unsigned int textCounter = 0;
+extern unsigned int kpa; // 99.2
+extern unsigned int tps; // 96.5
+extern unsigned int clt;  // 80 - 100
+extern unsigned int textCounter;
 //uint16_t packV = 0;
 //uint16_t packA = 0;
-

@@ -6,6 +6,7 @@
 #include "pMBB32.h"
 #include "defines.h"
 #include "Fsm.h"
+#include "throttle.h"
 
 using namespace TeensyTimerTool;
 IntervalTimer  t0;       // PIT channel — 10ms LDU torque command (highest priority)
@@ -255,8 +256,6 @@ void callback_t1() {//send PDU-8 driver settings every t1 period
   }
   counter++;
   //delay(1);
-  if (VCUstate != VCU_STATE_FAULT)//(VCUstate != VCU_STATE_OFF && VCUstate != VCU_STATE_FAULT)
-    displayStatus(); // update RealDash
 
   // Advantics ADM-CS-EVCC Generic Power Modules protocol — send every 62.5ms
   {
@@ -335,11 +334,14 @@ static volatile uint16_t pMBB32ftSeen[3] = {0, 0, 0};
 *   4. Read isolation state from SIM100MOD
 */
 void callback_t2() {
+  if (VCUstate != VCU_STATE_FAULT)
+    displayStatus(); // update RealDash
+
   // request all cell and temperature measurements every t2 period
   msg1.id = 0xFF0000;
   msg1.flags.extended = 1;
   msg1.len = 0;
-  can1.write(msg1);  
+  can1.write(msg1);
   //delay(1);
   // Invalidate data from any pMBB32 that has not responded within 400ms
   {
@@ -1763,39 +1765,6 @@ void linWriteValve(uint8_t position) {
   valvePosition = position;
   // uint8_t data[] = {position};
   // linBus.sendMasterRequestBlocking(LIN_Master_Base::LIN_V2, LIN_VALVE_ID, sizeof(data), data);
-}
-
-/* Dual Pot Throttle (EVWest, OEM pedal)
- * Both pots are read and scaled independently. A plausibility check confirms
- * they agree within THROTTLE_PLAUSIBILITY_PCT. On fault, throttle is zeroed.
- * TODO: bench-calibrate the MIN/MAX constants, then remove the hardcoded
- *       throttle = 100 override in displayStatus().
- */
-void readThrottle() {
-  // ── 1. READ ─────────────────────────────────────────────────────────────
-  // throttlePot1Raw, throttlePot2Raw, and brakePedal updated by ADS1115 in loop()
-  regenActive = (LDUrpm > 50) && (LDUtorque < -5); // negative torque = generating
-  brakePedal |= regenActive; // regen counts as braking: zeroes throttle + sets CANIO BRAKE
-
-  // ── 2. VERIFY — 5 % plausibility window between tracks ──────────────────
-  uint16_t pct1 = constrain(map(throttlePot1Raw, THROTTLE_POT1_MIN, THROTTLE_POT1_MAX, 0, 100), 0, 100);
-  uint16_t pct2 = constrain(map(throttlePot2Raw, THROTTLE_POT2_MIN, THROTTLE_POT2_MAX, 0, 100), 0, 100);
-  throttlePlausibility = (abs((int16_t)pct1 - (int16_t)pct2) <= THROTTLE_PLAUSIBILITY_PCT);
-  uint16_t pedalPct = throttlePlausibility ? pct1 : 0; // track 1 primary; fault → 0
-
-  // ── 3. ARBITRATE ─────────────────────────────────────────────────────────
-  bool faultActive = IVTfaultActive || (SIMM100MODerrorFlags != 0);
-
-  if (!throttlePlausibility || brakePedal) {
-    pedalPct = 0;                                          // hard zero on sensor fault or brake
-  } else if (faultActive) {
-    pedalPct = min(pedalPct, (uint16_t)THROTTLE_FAULT_LIMIT); // limit to safe ceiling
-  }
-  throttle = pedalPct;
-
-  // ── 4. MAP — linear 1:1 (TODO: replace with torque/slip curve) ───────────
-  // Result written to LDUtorqueSetpoint (0-100); callback_t0 transmits on 0x201.
-  LDUtorqueSetpoint = (VCUstate == VCU_STATE_DRIVE) ? (int16_t)pedalPct : 0;
 }
 
 /* Setup */
