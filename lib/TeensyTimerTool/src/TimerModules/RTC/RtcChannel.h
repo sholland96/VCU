@@ -48,7 +48,9 @@ namespace TeensyTimerTool
     {
         unsigned x = (unsigned)(period * (32768.0f / 1E6f));
         if (x == 0) x = 1;
-        int val = (int)__builtin_clz(x) - 16; // = 15 - floor(log2(x))
+        // SNVS periodic interrupt period = 2^PI_FREQ RTC ticks (32768 Hz) — confirmed
+        // empirically via a direct hardware sweep (PI_FREQ=11 -> 62500.00us exactly).
+        int val = 31 - __builtin_clz(x); // = floor(log2(x))
         if (val < 0)  val = 0;
         if (val > 15) val = 15;
         SNVS_HPCR = SNVS_HPCR_PI_FREQ(val);

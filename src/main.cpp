@@ -637,7 +637,6 @@ void can1Sniff(const CAN_message_t &msg) {
 */
 void can2Sniff(const CAN_message_t &msg) {
   digitalWriteFast(5, HIGH);
-  Serial.printf("CAN2 RAW id=0x%08lX len=%u\n", (unsigned long)msg.id, msg.len); // TEMP DEBUG — remove after keypad diagnosis
   switch (msg.id) {
     case 0x621://IVT-S Current
       IVTpackCurrent = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
