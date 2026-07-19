@@ -39,6 +39,19 @@ extern volatile uint16_t pMBB32ftSeen[3];
 #include "Fsm.h"
 extern Fsm fsm; // defined in main.cpp
 
+// FSM State objects — defined in main.cpp, wired up with add_transition() in init.cpp's setup().
+extern State state_Off;
+extern State state_PreCharge;
+extern State state_Idle;
+extern State state_Drive;
+extern State state_Charge;
+extern State state_HeatPack;
+extern State state_CoolPack;
+extern State state_Fault;
+extern State state_KL30C;
+
+extern bool extWakePending; // set in setup() when CAN wake detected; consumed by FSM
+
 // FSM events — unique integers required by arduino-fsm
 #define KL15_ON          1
 #define KL15_OFF         2
