@@ -24,7 +24,7 @@ Built with PlatformIO / Arduino framework.
 | Item | Detail |
 |------|--------|
 | Current/voltage sensor | Isabellenhuette IVT-S-1K-U3-I-CAN1-12V — CAN2 @ 500 kbps; measures pack current, pack voltage U1, pre-charge voltage U2, DCFC inlet voltage U3, temperature, power, Ah/Wh counters |
-| Auxiliary DC-DC | *(placeholder — HV → 12 V auxiliary supply, model TBD)* |
+| Auxiliary DC-DC | Chery New Energy combo OBC+DCDC unit — HV → 12 V auxiliary supply half of the unit; CAN2 @ 500 kbps (planned); see [Charging](#charging) for the on-board charger half and CAN protocol |
 | Active pre-charge | Texas Instruments TPS131PXQ1EVM-400 evaluation board — enable via pin 34 (3.3 V HIGH); passive pre-charge relay (PDU-8 CH3) used in parallel until active board is commissioned |
 | Isolation monitor | SIM100MOD — CAN2 @ 500 kbps; reports isolation resistance (Rp kΩ) and temperature |
 
@@ -33,7 +33,7 @@ Built with PlatformIO / Arduino framework.
 | Item | Detail |
 |------|--------|
 | DCFC controller | Advantics ADM-CS-EVCC CCS / CHAdeMO — CAN2 @ 500 kbps; Generic Power Modules extended-ID protocol + v2.5 standard-ID AC handshake |
-| OBC | Elcon UHF-CAN-312 on-board charger for AC charging — VCU AC contactor path implemented; Elcon CAN protocol *(TODO)* |
+| OBC | Chery New Energy combo OBC+DCDC unit, AC on-board charger half — CAN2 @ 500 kbps (planned); DBC supplied by vendor, decoded below. **Supersedes** the earlier Elcon UHF-CAN-312 placeholder; VCU AC contactor path (unchanged) is implemented, command/telemetry handling *(TODO)* |
 
 ### Thermal management
 
@@ -157,6 +157,8 @@ Devices: Isabellenhuette IVT-S-1K-U3-I-CAN1-12V, SIM100MOD, CAN keypad, OpenInve
 | `0x60011` | Extended | 62.5 ms | EVCC Power_Modules_Limits — Max_Voltage (0.1 V), Max_Current (0.1 A signed) |
 | `0x60012` | Extended | 62.5 ms | EVCC Sequence_Control — Start_Charge_Authorisation, CHAdeMO_Start_Button, CCS_Auth_Done/Valid, Charge_Parameters_Done, User_Stop_Button |
 | `0x611` | **Standard** | 62.5 ms | EVCC AC_Status (v2.5) — `Ready_To_Charge` bit 0; set while VCU is in Charge state, EVCC has granted delivery (`acReadyToDeliver`), and battery is not full; cleared immediately on `Charge_exit()` |
+| `0x0CE97FC4` | Extended | *(TODO)* | Chery OBC+DCDC — `VCU_DCDC_Command`: DCDC_Enable, DCDC_TargetVoltage (see below) |
+| `0x104CE8DC` | Extended | *(TODO)* | Chery OBC+DCDC — `VCU_OBC_Command`: OBC_TargetVoltage, OBC_TargetCurrent, OBC_ChargeControl (see below) |
 
 **OpenInverter LDU 0x201 frame — v5.32+ fixed bit-packed layout**
 
@@ -225,6 +227,26 @@ save
 | `0x68006` | on event | EVCC Emergency_Stop — Origin; clears EVCCsessionActive / EVCCsystemEnable |
 | `0x68007` | on event | EVCC Charge_Session_Finished; clears EVCCsessionActive / EVCCsystemEnable |
 | `0x68009` | 200 ms | EVCC Advantics_Controller_Status — State (heartbeat; absence implies EVCC fault) |
+| `0x0CE982A4` | *(TODO)* | Chery OBC+DCDC — `DCDC_Telemetry`: HV input V, LV output V, LV output I, temperature (see below) |
+| `0x103F34A4` | *(TODO)* | Chery OBC+DCDC — `OBC_Telemetry`: AC input V, HV output V, HV output I, status flags (see below) |
+
+**Chery New Energy OBC+DCDC frames** — DBC supplied by vendor (`dbc/Chery_New_Energy_OBC_DCDC.dbc`); bus assignment (CAN2) and baud rate are provisional pending hardware arrival. All four messages are extended-ID, byte-aligned big-endian (Motorola) fields.
+
+| Message | ID | Bytes | Field | Scale | Range | Notes |
+|---------|-----|-------|-------|-------|-------|-------|
+| `VCU_DCDC_Command` (TX) | `0x0CE97FC4` | 0 | `DCDC_Enable` | 1 | 0/1 | 0 = Disable_Standby, 1 = Enable |
+| | | 1–2 | `DCDC_TargetVoltage` | 0.1 V/bit | 0–20 V | |
+| `VCU_OBC_Command` (TX) | `0x104CE8DC` | 0–1 | `OBC_TargetVoltage` | 0.1 V/bit | 0–500 V | |
+| | | 2–3 | `OBC_TargetCurrent` | 0.1 A/bit | 0–50 A | |
+| | | 4 | `OBC_ChargeControl` | 1 | 0/1 | 0 = Charge_ON_Run, 1 = Charge_OFF_Stop |
+| `DCDC_Telemetry` (RX) | `0x0CE982A4` | 0–1 | `DCDC_HV_InputVoltage` | 0.1 V/bit | 0–500 V | |
+| | | 2–3 | `DCDC_LV_OutputVoltage` | 0.1 V/bit | 0–20 V | |
+| | | 4–5 | `DCDC_LV_OutputCurrent` | 0.1 A/bit | 0–250 A | |
+| | | 6 | `DCDC_Temperature` | 1, offset −40 | −40–120 °C | |
+| `OBC_Telemetry` (RX) | `0x103F34A4` | 0–1 | `OBC_AC_InputVoltage` | 1 V/bit | 0–300 V | |
+| | | 2–3 | `OBC_HV_OutputVoltage` | 0.1 V/bit | 0–500 V | |
+| | | 4–5 | `OBC_HV_OutputCurrent` | 0.1 A/bit | 0–50 A | |
+| | | 6 | `OBC_StatusFlags` | 1 | 0–255 | bitfield, meanings undefined in vendor DBC |
 
 ---
 
@@ -444,6 +466,31 @@ t0 runs at the highest ARM Cortex-M7 NVIC priority (`priority(0)`) and preempts 
 
 ---
 
+## Source Layout
+
+`main.cpp` started as a single 2200+ line file and has been split incrementally, one function/module at a time, into `src/`:
+
+| File | Contents |
+|------|----------|
+| `main.cpp` | Global objects (timers, CAN message structs, FSM `State` objects), `loop()`, and the small pMBB32 helpers (`wakepMBB32`, `shutdownpMBB32`, `ReadDigitalStatuses`, `ReadAnalogStatuses`) |
+| `init.cpp` | `setup()` and its GNSS `printPVTdata` auto-PVT callback |
+| `callbacks.cpp` | `callback_t0` / `t1` / `t2` / `t3` — the periodic timer callbacks (see [Periodic Tasks](#periodic-tasks)) |
+| `can_handlers.cpp` | `can1` / `can2` / `can3` `FlexCAN_T4` objects, `can1Sniff` / `can2Sniff` / `can3Sniff`, `initCAN()` |
+| `fsm_states.cpp` | FSM state enter/exit/check callbacks and `on_trans_*` transition callbacks |
+| `sleep.cpp` | `enterSleep()` — STOP-mode sleep sequence (see [KLR region](#klr-region-key-position-1)) |
+| `display.cpp` | `displayStatus()` — RealDash CAN3 update |
+| `sdlog.cpp` | SD card logging (`sdInit`, `sdLogData`, `sdQueueEventISR`, `sdDrainEvents`) |
+| `lin.cpp` | LIN valve I/O (`linInit`, `linReadValve`, `linWriteValve`) |
+| `throttle.cpp` | `readThrottle()` — the throttle pipeline (see [Throttle Pipeline](#throttle-pipeline)) |
+| `globals.cpp` | Remaining global variable definitions with initializers |
+| `pMBB32.h` | pMBB32 protocol constants (`wakeup`, `channelCount16`, `numberOfDevices`, frame IDs) |
+
+`include/defines.h` holds macros, types, and `extern` declarations for everything shared across these files; each split-out module also gets its own small prototype header (`callbacks.h`, `can_handlers.h`, etc.) included from wherever it's called.
+
+**Gotcha for future splits:** `FlexCAN_T4`'s constructor and `.begin()` both touch file-scope `static` routing pointers with internal linkage — if a `can1`/`can2`/`can3` object is *constructed* in one `.cpp` file but `.begin()` is *called* from another, the real interrupt vector ends up pointing at a trampoline that reads an unset pointer, and the board hangs on first CAN traffic (indistinguishable from a hardware fault). Keep construction and `.begin()`/`.onReceive()`/`.enableFIFOInterrupt()` calls for a given CAN object in the same translation unit — currently `can_handlers.cpp`.
+
+---
+
 ## Building
 
 Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Code and click **Build (✓)** in the PlatformIO toolbar.
@@ -474,7 +521,7 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 - **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` (ADS1115 counts; current values are ×8 approximations of old 12-bit readings)
 - **EVCC calibration** — set `EVCC_CELL_V_EMPTY` / `EVCC_CELL_V_FULL` (pMBB32 raw counts) for actual cell chemistry; set `EVCC_MAX_VOLTAGE_x10` and `EVCC_MAX_CURRENT_x10` for pack charge limits
 - **EVCC AC charging** — AC session detection and EVCC handshake implemented: `New_Charge_Session` (0x68001) `Plug_and_pins` ≥ 3 or `EVSE_Information` (0x600) Pins 1–3 → `evccIsACSession`; `AC_Control` (0x601) → `acReadyToDeliver`; `AC_Status` (0x611) `Ready_To_Charge` sent every 62.5 ms; VCU closes main contactors via KL30C → PreCharge → Charge. Still pending: confirm actual Pins value sent by EVCC on AC plug-in by CAN sniff; split `VCU_STATE_CHARGE` into `VCU_STATE_DCFC` and `VCU_STATE_AC_CHARGE`; implement `CHARGE_OFF` transition from EVCC session-end event
-- **Elcon UHF-CAN-312 OBC** — VCU AC contactor and EVCC handshake path is implemented; Elcon CAN protocol not yet wired (assign to CAN bus; implement charge current forwarding from EVCC AC_Control)
+- **Chery New Energy OBC+DCDC** — hardware ordered, not yet fitted; protocol decoded from vendor DBC (see [CAN2](#can2--500-kbps)) but not yet wired into `can2Sniff()` / `callback_t2()`. Once fitted: confirm actual bus/baud rate, send `VCU_DCDC_Command` (always-on `DCDC_Enable`, target 13.8–14.4 V) and `VCU_OBC_Command` (forward target V/I and start/stop from EVCC `AC_Control`/`Charging_Loop`), decode `DCDC_Telemetry` / `OBC_Telemetry` into new globals, replaces the earlier Elcon UHF-CAN-312 OBC placeholder
 - **EMP WP29 pumps** — confirm pump J1939 source address (`EMP_WP29_ADDR`, currently `0x8A`) matches both pumps via CAN sniffer; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
 - **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
 - **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-S U2 (pre-charge voltage)
