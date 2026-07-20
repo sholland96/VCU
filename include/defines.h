@@ -175,15 +175,6 @@ extern Adafruit_ADS1115 ads;
 // Drive HIGH to enable; LOW to disable. Monitored by check_PreCharge() via IVT U2.
 #define PRECHARGE_EN_PIN  34
 
-// Waveshare SIM7080G Cat-M/NB-IoT HAT — cellular modem (LTE-M, T-Mobile)
-// UART: Serial7 (TX7=pin 29 → SIM7080G RX, RX7=pin 28 → SIM7080G TX) at 115200 baud, 3.3V logic (HAT default).
-// PWRKEY: pin 27 — pulse LOW for ~1 s on startup to power on the module.
-// SMS via AT+CMGS; data via AT+CNACT / AT+SHCONN (HTTPS).
-// Do not connect HAT GNSS antenna — u-blox NEO-M8M already fitted.
-#define SIM7080_SERIAL    Serial7
-#define SIM7080_BAUD      115200
-#define SIM7080_PWRKEY    27    // pulse LOW ~1 s to power on module
-
 extern SFE_UBLOX_GNSS myGNSS;
 #endif
 

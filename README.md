@@ -17,7 +17,6 @@ Built with PlatformIO / Arduino framework.
 | LIN transceivers | 2× MCP2003B *(placeholder — TBD)* on Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
 | ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN\_ONE ±4.096 V, 860 SPS) |
-| SMS modem | SIMCom SIM7080G NB-IoT / Cat-M1 — Serial7 (RX7=pin 28 ← SIM7080G TX, TX7=pin 29 → SIM7080G RX); PWRKEY=pin 27 (pulse LOW ~1 s to power on) |
 
 ### Powertrain
 
@@ -252,7 +251,7 @@ save
 
 ### CAN3 — 1 Mbps
 
-Devices: Wireless gateway, RealDash
+Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles SMS/cellular; a Teensy-direct SIM7080G approach was tried and abandoned, see git history), RealDash
 
 **Transmitted (VCU → RealDash / gateway)**
 
@@ -321,9 +320,6 @@ Key constants (`defines.h`):
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
-| 28 (RX7) | SIM7080G UART — connects to SIM7080G TX (`SIM7080_SERIAL` = Serial7) |
-| 29 (TX7) | SIM7080G UART — connects to SIM7080G RX |
-| 27 (D27) | SIM7080G PWRKEY (`SIM7080_PWRKEY`) — pulse LOW ~1 s to power on module |
 | 32 | CAN transceiver standby (`CAN_STBY_PIN`) — driven HIGH during sleep to put all three transceivers into standby. STBY pins lifted from GND on SK Pang board and wired to this pin. |
 | 33 | GNSS EXTINT (`GNSS_EXTINT_PIN`) — wire to SK Pang GNSS EXTINT header; pulsed HIGH before reset to wake module from backup |
 | 34 | TPS131PXQ1EVM-400 active pre-charge enable (`PRECHARGE_EN_PIN`) — driven HIGH during PreCharge state |
