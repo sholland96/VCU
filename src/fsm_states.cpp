@@ -30,22 +30,50 @@ void Idle_enter()
   Serial.println("Entering Idle state");
   VCUstate = VCU_STATE_IDLE;
   sdLogEvent("STATE:IDLE");
+  
+  /* Send SMS
+  0 = send "KL15R on" message
+  1 = send "KL15C on" message
+  2 = send "Pre-charge failed..." message
+  3 = send "Something happened..." message
+  4 = send "Charging stopped..." message
+  5 = send "Temperature warning..." message
+  any other value  = send "Invalid request..." message
+  */
+  msg3.id = 0xC79;//send SMS
+  msg3.len = 1;
+  msg3.buf[0] = 0;//send "KL15R on" message
+  can3.write(msg3);
+
   //PDUmsg2.buf[3] = 0xFE;//HS driver 3 PWM set to 99%- positive pre-charge
   //PDUmsg1.buf[3] = 5;//HS driver 3 current limit 2A (2/0.4A = 5) - positive pre-charge
 
-  msg2.id = 0x18EF2100;//keypad button color command
-  msg2.flags.extended = 1;
-  msg2.len = 8;
-  msg2.buf[0] = 0x04;
-  msg2.buf[1] = 0x1B;
-  msg2.buf[2] = KEYPAD_CMD_SET_LED;
-  msg2.buf[3] = 0x05;//button 5
-  msg2.buf[4] = KEYPAD_COLOR_AMBER;
-  msg2.buf[5] = KEYPAD_MODE_BLINK;
-  msg2.buf[6] = 0x00;
-  msg2.buf[7] = 0xFF;
-  can2.write(msg2);
-  //delay(1);
+    msg2.id = 0x18EF2100;//keypad button color command
+    msg2.flags.extended = 1;
+    msg2.len = 8;
+    msg2.buf[0] = 0x04;
+    msg2.buf[1] = 0x1B;
+    msg2.buf[2] = KEYPAD_CMD_SET_LED;
+    msg2.buf[3] = 0x05;//button 5
+    msg2.buf[4] = KEYPAD_COLOR_AMBER;
+    msg2.buf[5] = KEYPAD_MODE_BLINK;
+    msg2.buf[6] = 0x00;
+    msg2.buf[7] = 0xFF;
+    can2.write(msg2);
+
+    /* Send SMS
+    0 = send "KL15R on" message
+    1 = send "KL15C on" message
+    2 = send "Pre-charge failed..." message
+    3 = send "Something happened..." message
+    4 = send "Charging stopped..." message
+    5 = send "Temperature warning..." message
+    any other value  = send "Invalid request..." message
+    */
+    msg3.id = 0xC79;//send SMS
+    msg3.len = 1;
+    msg3.buf[0] = 2;//send "Pre-charge failed..." message
+    can3.write(msg3);
 
   // read IVT-MOD pack voltage U2, compare to pack voltage U1, if U2 < 95% of U1 after 2 seconds:
   // - send error message to keypad
@@ -71,22 +99,6 @@ void Idle_enter()
   // if pre-charge good, enable positive contactor
   //PDUmsg2.buf[4] = 0xFE;//HS driver 5 PWM set to 99%- positive contactor
   //PDUmsg1.buf[4] = 0;//HS driver 5 current limit 5A (5/0.4A = 13 or 0x0D) - positive contactor
-
-
-  /* Send SMS
-  0 = send "KLR on" message
-  1 = send "KL15 on" message
-  2 = send "Pre-charge failed..." message
-  3 = send "Something happened..." message
-  4 = send "Charging stopped..." message
-  5 = send "Temperature warning..." message
-  any other value  = send "Invalid request..." message
-  */
-  msg3.id = 0xC79;//send SMS
-  msg3.len = 1;
-  msg3.buf[0] = 1;//send "KL15 on" message
-  can3.write(msg3);
-  delay(1);
 }
 
 void Charge_enter()

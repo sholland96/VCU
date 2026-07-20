@@ -267,9 +267,9 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 
 | Code | Message | Sent from |
 |------|---------|-----------|
-| 0 | "KLR on" | *(not yet called)* |
-| 1 | "KL15 on" | `Idle_enter()` |
-| 2 | "Pre-charge failed..." | *(not yet called)* |
+| 0 | "KL15R on" | `Idle_enter()` |
+| 1 | "KL15C on" | *(not yet called)* |
+| 2 | "Pre-charge failed..." | `Idle_enter()` — **note:** fires unconditionally on every Idle entry, which only happens after a successful pre-charge (`PRECHARGE_OK`); likely a placeholder rather than intentional, worth revisiting |
 | 3 | "Something happened..." | `Fault_enter()` |
 | 4 | "Charging stopped..." | *(not yet called)* |
 | 5 | "Temperature warning..." | *(not yet called)* |
