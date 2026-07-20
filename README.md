@@ -519,7 +519,7 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 | `luni64/TeensyTimerTool` | Periodic timer callbacks (RTC, GPT1, GPT2) |
 | `sparkfun/SparkFun u-blox GNSS Arduino Library` | GNSS / GPS |
 | `jonblack/arduino-fsm` | Finite state machine |
-| `gicking/LIN master portable` | LIN master on Serial3 |
+| `gicking/LIN master portable` | LIN master on Serial6 |
 | `adafruit/Adafruit ADS1X15` | ADS1115 16-bit ADC driver |
 
 ---

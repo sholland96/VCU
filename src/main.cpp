@@ -115,6 +115,7 @@ void ReadAnalogStatuses() {
     analogPins[i] = analogRead(i);
   }
 }//end of ReadAnalogStatuses()
+
 /* Main */
 void loop() {
   digitalWriteFast(3, HIGH);
