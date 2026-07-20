@@ -255,7 +255,7 @@ void Fault_enter() {
   can2.write(msg2);
   msg3.id = 0xC79;
   msg3.len = 1;
-  msg3.buf[0] = 2; // "Something happened..."
+  msg3.buf[0] = 3; // "Something happened..."
   can3.write(msg3);
 }
 

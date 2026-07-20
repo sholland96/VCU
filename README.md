@@ -257,11 +257,23 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 
 | ID | Description |
 |----|-------------|
-| `0xC79` | SMS command to wireless gateway |
+| `0xC79` | SMS command to wireless gateway (byte 0 = message code, see below) |
 | `0xC80` | RPM, power, temperature, throttle (every 62.5 ms) |
 | `0xC81` | Pack voltage, pack current, 12 V battery voltage |
 | `0xC82` | Highest/lowest cell voltage, ground speed, GPS altitude |
 | `0xC83` | Cell delta voltage, SIM100MOD isolation, SIM100MOD temperature, GPS fix type |
+
+**`0xC79` SMS message codes** (byte 0, 1 byte total) — the gateway sends a canned text for each code:
+
+| Code | Message | Sent from |
+|------|---------|-----------|
+| 0 | "KLR on" | *(not yet called)* |
+| 1 | "KL15 on" | `Idle_enter()` |
+| 2 | "Pre-charge failed..." | *(not yet called)* |
+| 3 | "Something happened..." | `Fault_enter()` |
+| 4 | "Charging stopped..." | *(not yet called)* |
+| 5 | "Temperature warning..." | *(not yet called)* |
+| other | "Invalid request..." | — |
 
 **Received**
 
