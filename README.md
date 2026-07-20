@@ -14,7 +14,7 @@ Built with PlatformIO / Arduino framework.
 | Carrier board | SK Pang Electronics Teensy 4.1 Triple CAN Board with ETH and u-blox NEO-M8M GNSS |
 | MCU | PJRC Teensy 4.1 (ARM Cortex-M7 @ 600 MHz) |
 | CAN transceivers | 3× on SK Pang board (CAN1/2/3); STBY pins lifted from GND and wired to pin 32 — driven HIGH in sleep to put all three into standby |
-| LIN transceivers | 2× MCP2003B *(placeholder — TBD)* on Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1) |
+| LIN transceivers | 2× MCP2003B *(placeholder — TBD)* — bus 1 on Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1); bus 2 *(planned)* on Serial7 (TX7=pin 29, RX7=pin 28) |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
 | ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN\_ONE ±4.096 V, 860 SPS) |
 
@@ -271,11 +271,12 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 
 ---
 
-## LIN Bus — 19200 baud (Serial3)
+## LIN Buses — 19200 baud
 
-| Device | Direction | Node ID | Notes |
-|--------|-----------|---------|-------|
-| BMW i4/i5/i7/iX Changeover Valve 64119462114 | Slave response | `0x10` *(TBD)* | Byte map TBD from BMW ISTA docs |
+| Device | Bus | Direction | Node ID | Notes |
+|--------|-----|-----------|---------|-------|
+| BMW i4/i5/i7/iX Changeover Valve 64119462114 (#1) | Serial3 (TX3=pin 14, RX3=pin 15) | Slave response | `0x10` *(TBD)* | Byte map TBD from BMW ISTA docs; implemented in `lin.cpp` |
+| BMW i4/i5/i7/iX Changeover Valve 64119462114 (#2) | Serial7 (TX7=pin 29, RX7=pin 28) *(planned)* | Slave response | *(TBD)* | Not yet wired or implemented — pins freed up after dropping the Teensy-direct SIM7080G |
 
 Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
 
@@ -320,6 +321,8 @@ Key constants (`defines.h`):
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
+| 28 (RX7) | LIN bus 2 RX *(planned — second BMW changeover valve)* |
+| 29 (TX7) | LIN bus 2 TX |
 | 32 | CAN transceiver standby (`CAN_STBY_PIN`) — driven HIGH during sleep to put all three transceivers into standby. STBY pins lifted from GND on SK Pang board and wired to this pin. |
 | 33 | GNSS EXTINT (`GNSS_EXTINT_PIN`) — wire to SK Pang GNSS EXTINT header; pulsed HIGH before reset to wake module from backup |
 | 34 | TPS131PXQ1EVM-400 active pre-charge enable (`PRECHARGE_EN_PIN`) — driven HIGH during PreCharge state |
@@ -519,7 +522,7 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 - **EVCC AC charging** — AC session detection and EVCC handshake implemented: `New_Charge_Session` (0x68001) `Plug_and_pins` ≥ 3 or `EVSE_Information` (0x600) Pins 1–3 → `evccIsACSession`; `AC_Control` (0x601) → `acReadyToDeliver`; `AC_Status` (0x611) `Ready_To_Charge` sent every 62.5 ms; VCU closes main contactors via KL30C → PreCharge → Charge. Still pending: confirm actual Pins value sent by EVCC on AC plug-in by CAN sniff; split `VCU_STATE_CHARGE` into `VCU_STATE_DCFC` and `VCU_STATE_AC_CHARGE`; implement `CHARGE_OFF` transition from EVCC session-end event
 - **Chery New Energy OBC+DCDC** — hardware ordered, not yet fitted; protocol decoded from vendor DBC (see [CAN2](#can2--500-kbps)) but not yet wired into `can2Sniff()` / `callback_t2()`. Once fitted: confirm actual bus/baud rate, send `VCU_DCDC_Command` (always-on `DCDC_Enable`, target 13.8–14.4 V) and `VCU_OBC_Command` (forward target V/I and start/stop from EVCC `AC_Control`/`Charging_Loop`), decode `DCDC_Telemetry` / `OBC_Telemetry` into new globals, replaces the earlier Elcon UHF-CAN-312 OBC placeholder
 - **EMP WP29 pumps** — confirm pump J1939 source address (`EMP_WP29_ADDR`, currently `0x8A`) matches both pumps via CAN sniffer; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
-- **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`
+- **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`; wire and implement the second valve's LIN bus on Serial7 (TX7=29, RX7=28)
 - **Pre-charge / contactor sequencing** — Idle state entry currently has a fixed 5 s delay; implement voltage-based pre-charge completion check using IVT-S U2 (pre-charge voltage)
 - **Regen braking** — implement `pot2` / `regenpreset` fields in the LDU frame; wire to brake pressure or paddle
 - **pMBB32 individual cell voltages** — broadcast frames (ft=01..0C) received but not decoded in `can1Sniff()`; only min/max summary (ft=0E) is currently used
