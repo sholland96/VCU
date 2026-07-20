@@ -66,6 +66,9 @@ void callback_t0() {
 *   3. Update RealDash
 */
 void callback_t1() {//send PDU-8 driver settings every t1 period
+  if (VCUstate != VCU_STATE_FAULT)
+    displayStatus(); // update RealDash
+
   //send PDU-8 driver settings every t1 period (125ms)
   can1.write(PDUmsg1);
   //delay(1);
@@ -170,9 +173,6 @@ volatile uint16_t pMBB32ftSeen[3] = {0, 0, 0};
 *   4. Read isolation state from SIM100MOD
 */
 void callback_t2() {
-  if (VCUstate != VCU_STATE_FAULT)
-    displayStatus(); // update RealDash
-
   // request all cell and temperature measurements every t2 period
   msg1.id = 0xFF0000;
   msg1.flags.extended = 1;
