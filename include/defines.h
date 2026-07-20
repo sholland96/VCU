@@ -303,9 +303,8 @@ extern uint16_t LDUdcVoltage;              // DC bus voltage (V × 10)
 extern uint16_t LDUstatus;                 // status bitfield
 extern uint16_t LDUfaults;                 // fault bitfield
 
-// BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial3
-// Serial3 hardware pins on Teensy 4.1: TX3=pin14 (A0), RX3=pin15 (A1)
-// SK Pang board GNSS UART is on Serial2 (pins 7/8) — Serial3 is free for LIN.
+// BMW i4/i5/i7/iX Changeover Valve 64119462114 — LIN slave on Serial6
+// Serial6 hardware pins on Teensy 4.1: TX6=pin24, RX6=pin25
 // TODO: confirm LIN node ID and full frame spec from BMW service docs
 #define LIN_BAUD      19200     // LIN 2.x
 #define LIN_VALVE_ID  0x10      // TODO: confirm BMW LIN node address

@@ -14,7 +14,7 @@ Built with PlatformIO / Arduino framework.
 | Carrier board | SK Pang Electronics Teensy 4.1 Triple CAN Board with ETH and u-blox NEO-M8M GNSS |
 | MCU | PJRC Teensy 4.1 (ARM Cortex-M7 @ 600 MHz) |
 | CAN transceivers | 3× on SK Pang board (CAN1/2/3); STBY pins lifted from GND and wired to pin 32 — driven HIGH in sleep to put all three into standby |
-| LIN transceivers | 2× MCP2003B *(placeholder — TBD)* — bus 1 on Serial3 (TX3=pin 14 / A0, RX3=pin 15 / A1); bus 2 *(planned)* on Serial7 (TX7=pin 29, RX7=pin 28) |
+| LIN transceivers | 2× MCP2003B *(placeholder — TBD)* — bus 1 on Serial6 (TX6=pin 24, RX6=pin 25); bus 2 *(planned)* on Serial7 (TX7=pin 29, RX7=pin 28) |
 | GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
 | ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN\_ONE ±4.096 V, 860 SPS) |
 
@@ -275,7 +275,7 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 
 | Device | Bus | Direction | Node ID | Notes |
 |--------|-----|-----------|---------|-------|
-| BMW i4/i5/i7/iX Changeover Valve 64119462114 (#1) | Serial3 (TX3=pin 14, RX3=pin 15) | Slave response | `0x10` *(TBD)* | Byte map TBD from BMW ISTA docs; implemented in `lin.cpp` |
+| BMW i4/i5/i7/iX Changeover Valve 64119462114 (#1) | Serial6 (TX6=pin 24, RX6=pin 25) | Slave response | `0x10` *(TBD)* | Byte map TBD from BMW ISTA docs; implemented in `lin.cpp` |
 | BMW i4/i5/i7/iX Changeover Valve 64119462114 (#2) | Serial7 (TX7=pin 29, RX7=pin 28) *(planned)* | Slave response | *(TBD)* | Not yet wired or implemented — pins freed up after dropping the Teensy-direct SIM7080G |
 
 Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
@@ -316,11 +316,11 @@ Key constants (`defines.h`):
 | 4 | CAN1 RX timing debug output |
 | 5 | CAN2 RX timing debug output |
 | 6 | `displayStatus()` timing debug output |
-| 14 (TX3 / A0) | LIN bus TX |
-| 15 (RX3 / A1) | LIN bus RX |
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
+| 24 (TX6) | LIN bus 1 TX |
+| 25 (RX6) | LIN bus 1 RX |
 | 28 (RX7) | LIN bus 2 RX *(planned — second BMW changeover valve)* |
 | 29 (TX7) | LIN bus 2 TX |
 | 32 | CAN transceiver standby (`CAN_STBY_PIN`) — driven HIGH during sleep to put all three transceivers into standby. STBY pins lifted from GND on SK Pang board and wired to this pin. |

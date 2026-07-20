@@ -1,4 +1,4 @@
-/* lin.cpp — BMW i4/i5/i7/iX Changeover Valve 64119462114, LIN master on Serial3.
+/* lin.cpp — BMW i4/i5/i7/iX Changeover Valve 64119462114, LIN master on Serial6.
  * LIN 2.x, 19200 baud. Uses gicking/LIN master portable (LIN_Master_HardwareSerial).
  * TODO: confirm node ID, response frame length, byte map, and checksum type
  *       from BMW LIN specification / ISTA service documentation.
@@ -8,7 +8,7 @@
 #include "defines.h"
 #include "lin.h"
 
-LIN_Master_HardwareSerial linBus(Serial3, "Valve"); // Serial3: RX3=pin7, TX3=pin8
+LIN_Master_HardwareSerial linBus(Serial6, "Valve"); // Serial6: TX6=pin24, RX6=pin25
 
 void linInit() {
   linBus.begin(LIN_BAUD);
