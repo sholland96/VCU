@@ -21,7 +21,7 @@ static volatile uint8_t  sdEvtTail   = 0;
 
 static const char* const vcuStateStr[] = {
     "OFF", "PRECHARGE", "IDLE", "DRIVE", "CHARGE",
-    "HEAT", "COOL", "FAULT", "KL30C"
+    "HEAT", "COOL", "FAULT", "KL15C"
 };
 
 // Internal push — caller must ensure exclusive access (noInterrupts or ISR context).

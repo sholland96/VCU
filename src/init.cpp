@@ -46,11 +46,17 @@ void setup() {
 
   pinMode(KL15R_PIN, INPUT_PULLDOWN); // KL15R key position 1 — LOW = key off → sleep
 
-  // Detect CAN-wake boot: sleepMagic is set in enterSleep() based on wake source.
-  // SLEEP_MAGIC_CAN_WAKE + KL15R LOW = CAN2 woke the VCU → enter KL30C standby.
-  if (sleepMagic == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN))
+  // Detect CAN-wake boot: SNVS_LPGPR0 is set in enterSleep() based on wake source.
+  // SLEEP_MAGIC_CAN_WAKE + KL15R LOW = CAN2/CAN3 woke the VCU → enter KL15C standby.
+  Serial.printf("SNVS_LPGPR0=0x%08lX (expect 0x%08lX for CAN wake) KL15R=%d\n",
+                SNVS_LPGPR0, (uint32_t)SLEEP_MAGIC_CAN_WAKE, digitalRead(KL15R_PIN));
+  if (SNVS_LPGPR0 == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN)) {
     extWakePending = true;
-  sleepMagic = 0; // clear so a cold-boot after this point does not misfire
+    Serial.println("Boot cause: CAN wake (EVCC or wireless gateway) — entering KL15C");
+  } else {
+    Serial.println("Boot cause: key-on or cold boot");
+  }
+  SNVS_LPGPR0 = 0; // clear so a cold-boot after this point does not misfire
 
   pinMode(CAN_STBY_PIN, OUTPUT);
   digitalWrite(CAN_STBY_PIN, LOW);    // transceivers active; driven HIGH in enterSleep()
@@ -104,20 +110,26 @@ void setup() {
   Wire.begin();
   Wire.setTimeout(50);             // 50ms — backup-wake I2C responses are slower
 
-  // GNSS was woken via EXTINT rising edge in enterSleep() before AIRCR reset;
-  // it hot-starts during Teensy setup().  Just wait for I2C to respond.
-  while (myGNSS.begin() == false)
-  {
-    Serial.println(F("u-blox GNSS not detected — retrying"));
-    delay(500);
+  // Skip GNSS bring-up entirely on a CAN-triggered wake (EVCC/gateway) — GNSS isn't needed
+  // to answer a pMBB32 status query, and the retry loop below is uncapped, so touching it
+  // here would risk an indefinite hang blocking a request that has nothing to do with GPS.
+  if (!extWakePending) {
+    // GNSS was woken via EXTINT rising edge in enterSleep() before AIRCR reset;
+    // it hot-starts during Teensy setup().  Just wait for I2C to respond.
+    while (myGNSS.begin() == false)
+    {
+      Serial.println(F("u-blox GNSS not detected — retrying"));
+      delay(500);
+    }
+
+    Serial.println("GNSS online");
+    gnssInitialized = true;
+
+    Serial.printf("setI2COutput:  %s\n", myGNSS.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA) ? "OK" : "FAIL");
+    Serial.printf("saveConfig:    %s\n", myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT) ? "OK" : "FAIL");
+    Serial.printf("setNavFreq:    %s\n", myGNSS.setNavigationFrequency(10) ? "OK" : "FAIL");
+    Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
   }
-
-  Serial.println("GNSS online");
-
-  Serial.printf("setI2COutput:  %s\n", myGNSS.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA) ? "OK" : "FAIL");
-  Serial.printf("saveConfig:    %s\n", myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT) ? "OK" : "FAIL");
-  Serial.printf("setNavFreq:    %s\n", myGNSS.setNavigationFrequency(10) ? "OK" : "FAIL");
-  Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
 #endif
 
   // ADS1115 — I2C0 shares Wire with GNSS (already started above).
@@ -316,10 +328,10 @@ void setup() {
   fsm.add_transition(&state_HeatPack, &state_Idle,     TEMP_OK,   nullptr);
   fsm.add_transition(&state_CoolPack, &state_Idle,     TEMP_OK,   nullptr);
 
-  // KL30C — CAN/EVCC external wake standby
-  fsm.add_transition(&state_Off,   &state_KL30C,    EXT_WAKE,        nullptr);
-  fsm.add_transition(&state_KL30C, &state_Off,      KL15_ON,         nullptr);
-  fsm.add_transition(&state_KL30C, &state_PreCharge, AC_CHARGE_START, nullptr);
+  // KL15C — CAN/EVCC external wake standby
+  fsm.add_transition(&state_Off,   &state_KL15C,    EXT_WAKE,        nullptr);
+  fsm.add_transition(&state_KL15C, &state_Off,      KL15_ON,         nullptr);
+  fsm.add_transition(&state_KL15C, &state_PreCharge, AC_CHARGE_START, nullptr);
 
   // Set keypad LEDs to Off state
   msg2.id = 0x18EF2100;
@@ -349,7 +361,7 @@ void setup() {
   can2.write(msg2);
   Off_enter();
 
-  // CAN-wake boot detected above — enter KL30C standby immediately.
+  // CAN-wake boot detected above — enter KL15C standby immediately.
   if (extWakePending) {
     extWakePending = false;
     fsm.trigger(EXT_WAKE);

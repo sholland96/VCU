@@ -351,8 +351,8 @@ void can2Sniff(const CAN_message_t &msg) {
       evccIsACSession   = !EVCC_PLUG_IS_DC(EVCCplugType); // AC plug → VCU closes main contactors
       chargeMode        = evccIsACSession; // true routes PreCharge → Charge (not Idle)
       sdLogEvent(evccIsACSession ? "EVCC_SESSION_AC" : "EVCC_SESSION_DC");
-      // DC: EVCC handles its own pre-charge and contactors autonomously; VCU stays in KL30C.
-      // AC: check_KL30C() detects evccIsACSession and fires AC_CHARGE_START → PreCharge → Charge.
+      // DC: EVCC handles its own pre-charge and contactors autonomously; VCU stays in KL15C.
+      // AC: check_KL15C() detects evccIsACSession and fires AC_CHARGE_START → PreCharge → Charge.
       // TODO: update EVCC_PLUG_IS_DC macro when AC plug type values are confirmed.
       break;
     case EVCC_CHARGING_LOOP:  // 0x68005 — active charge targets from EVSE
@@ -380,7 +380,7 @@ void can2Sniff(const CAN_message_t &msg) {
       break;
     case EVCC_CTRL_STATUS:  // 0x68009 — EVCC heartbeat (200ms timeout)
       EVCCstage         = msg.buf[0]; // 0=Booting … 8=Charging … 10=Finished
-      lastExtActivityMs = millis();   // heartbeat resets KL30C inactivity timer
+      lastExtActivityMs = millis();   // heartbeat resets KL15C inactivity timer
       break;
     case EVCC_INS_TEST:     // 0x68002 — insulation test in progress
     case EVCC_PRECHARGE:    // 0x68003 — precharge in progress
@@ -410,8 +410,12 @@ void can2Sniff(const CAN_message_t &msg) {
 }//end of can2Sniff(const CAN_message_t &msg)
 
 void can3Sniff(const CAN_message_t &msg) {
-  lastExtActivityMs = millis(); // any gateway frame resets KL30C inactivity timer
+  lastExtActivityMs = millis(); // any gateway frame resets KL15C inactivity timer
   switch (msg.id) {
+    case 0xC84: // status request from wireless gateway — answered (0xC85) by callback_t2()
+      Serial.println("CAN3: 0xC84 status request received");
+      gatewayStatusRequestPending = true;
+      break;
     case 500:
       break;
     default:

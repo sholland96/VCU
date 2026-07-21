@@ -13,7 +13,7 @@ typedef enum {
   VCU_STATE_HEAT_PACK,
   VCU_STATE_COOL_PACK,
   VCU_STATE_FAULT,
-  VCU_STATE_KL30C   // external CAN wake (EVCC/gateway) with KL15R low
+  VCU_STATE_KL15C   // external CAN wake (EVCC/gateway) with KL15R low
 } VCUStateEnum;
 
 extern VCUStateEnum VCUstate; // defined in main.cpp
@@ -36,6 +36,14 @@ extern CAN_message_t LDUmsg;
 extern volatile bool     pMBB32ghostSA;
 extern volatile uint16_t pMBB32ftSeen[3];
 
+// Wireless gateway status request (0xC84) — set by can3Sniff(), consumed/answered
+// (0xC85 response) by callback_t2(). See README CAN3 section for wake/retry design.
+extern volatile bool     gatewayStatusRequestPending;
+// Set by callback_t2() right after sending the 0xC85 response; consumed by loop(), which
+// sleeps promptly instead of waiting out the normal KLR debounce (enterSleep() calls SD
+// card I/O, which must not run from callback_t2()'s ISR context).
+extern volatile bool     gatewayResponseSent;
+
 #include "Fsm.h"
 extern Fsm fsm; // defined in main.cpp
 
@@ -48,9 +56,11 @@ extern State state_Charge;
 extern State state_HeatPack;
 extern State state_CoolPack;
 extern State state_Fault;
-extern State state_KL30C;
+extern State state_KL15C;
 
 extern bool extWakePending; // set in setup() when CAN wake detected; consumed by FSM
+extern uint32_t klrLowSince; // reset in Off_enter() — start of Off-state KLR debounce
+extern bool gnssInitialized; // set in setup() only if GNSS bring-up actually ran this boot
 
 // FSM events — unique integers required by arduino-fsm
 #define KL15_ON          1
@@ -68,13 +78,13 @@ extern bool extWakePending; // set in setup() when CAN wake detected; consumed b
 #define TEMP_HIGH        13
 #define TEMP_OK          14
 #define EXT_WAKE         15  // CAN/EVCC external wake without KL15R
-#define AC_CHARGE_START  16  // AC plug detected in KL30C → close main contactors via PreCharge
+#define AC_CHARGE_START  16  // AC plug detected in KL15C → close main contactors via PreCharge
 
-#define KL30C_SLEEP_TIMEOUT_MS 60000UL  // sleep after 60 s of inactivity in KL30C
+#define KL15C_SLEEP_TIMEOUT_MS 60000UL  // sleep after 60 s of inactivity in KL15C
 
 // Cross-module state flags — defined in main.cpp.
-extern uint32_t lastExtActivityMs; // last EVCC heartbeat or gateway frame (for KL30C timeout)
-extern bool     kl30cKL15Rstate;   // tracks KL15R pin state inside KL30C for LED edge detect
+extern uint32_t lastExtActivityMs; // last EVCC heartbeat or gateway frame (for KL15C timeout)
+extern bool     kl15cKL15Rstate;   // tracks KL15R pin state inside KL15C for LED edge detect
 extern bool     evccIsACSession;   // true when plug type is AC → VCU closes main contactors
 extern bool     acReadyToDeliver;  // set by AC_Control (0x601); EVCC grants AC power delivery
 
@@ -85,9 +95,11 @@ extern TeensyTimerTool::PeriodicTimer t1, t2, t3;
 
 #define KL15R_PIN 2  // physical key position 1 (accessory) — wakes hardware, no FSM role
 
-// DMAMEM places sleepMagic in OCRAM (.bss.dma, NOLOAD): valid writable RAM, not zeroed by CRT
-// startup, survives AIRCR reset. Used in enterSleep() and setup() to detect CAN-wake vs key-on.
-extern volatile uint32_t sleepMagic;
+// SNVS_LPGPR0 (battery-backed low-power general-purpose register) carries the wake-cause
+// flag across enterSleep()'s AIRCR reset. Used in enterSleep() and setup() to detect
+// CAN-wake vs key-on. Plain DMAMEM/OCRAM was tried first but did not reliably retain its
+// value through this STOP-mode config (confirmed on hardware — same wake path, same
+// garbage readback, regardless of wake source); SNVS_LPGPR0 is purpose-built for this.
 #define SLEEP_MAGIC_CAN_WAKE 0xC4A8B3E1UL
 
 #define KEYPAD_COLOR_OFF          0
@@ -170,6 +182,10 @@ extern Adafruit_ADS1115 ads;
 // CAN2 RXD wake input — MCP2562 in standby still drives RXD low on dominant bus edges,
 // allowing the EVCC to wake the VCU without KLR. CANRX2 / UART RX1 = pin 0 (confirmed).
 #define CAN2_RX_PIN       0
+
+// CAN3 RXD wake input — same standby behaviour as CAN2, allows the wireless gateway to
+// wake the VCU without KLR. CRX3 = pin 30 (confirmed via FlexCAN_T4 source).
+#define CAN3_RX_PIN       30
 
 // TPS131PXQ1EVM-400 active pre-charge enable (TIDA-050082).
 // Drive HIGH to enable; LOW to disable. Monitored by check_PreCharge() via IVT U2.
@@ -516,9 +532,9 @@ void on_trans_PreCharge_Idle();
 void on_trans_PreCharge_Charge();
 void on_trans_PreCharge_Fault();
 void on_trans_Fault_Off();
-void KL30C_enter();
-void check_KL30C();
-void KL30C_exit();
+void KL15C_enter();
+void check_KL15C();
+void KL15C_exit();
 void enterSleep();
 
 extern byte buf[8];

@@ -251,7 +251,7 @@ save
 
 ### CAN3 — 1 Mbps
 
-Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles SMS/cellular; a Teensy-direct SIM7080G approach was tried and abandoned, see git history), RealDash
+Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles SMS/cellular), RealDash
 
 **Transmitted (VCU → RealDash / gateway)**
 
@@ -262,6 +262,7 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 | `0xC81` | Pack voltage, pack current, 12 V battery voltage |
 | `0xC82` | Highest/lowest cell voltage, ground speed, GPS altitude |
 | `0xC83` | Cell delta voltage, SIM100MOD isolation, SIM100MOD temperature, GPS fix type |
+| `0xC85` | Status response to gateway status request (see below) |
 
 **`0xC79` SMS message codes** (byte 0, 1 byte total) — the gateway sends a canned text for each code:
 
@@ -274,6 +275,46 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 | 4 | "Charging stopped..." | *(not yet called)* |
 | 5 | "Temperature warning..." | *(not yet called)* |
 | other | "Invalid request..." | — |
+
+**Wake-on-CAN3 status request/response** — the gateway can wake the VCU from sleep to ask for
+current status. CAN3's RX pin (pin 30) is armed as a third `enterSleep()` wake source (alongside
+KL15R and CAN2), the same way EVCC/CAN2 activity already wakes the VCU — the CAN controller is
+clock-gated during sleep, so only a raw GPIO edge is detected; the actual request frame is not
+decoded until after the wake-and-reboot cycle completes. **The gateway retries the request every
+500 ms for up to 20 s** until it gets a response, since the frame that triggers the wake is itself
+lost.
+
+Ideally the VCU recognises this as a CAN wake (via `SNVS_LPGPR0`, see below) and lands directly in
+`KL15C` standby, which skips GNSS bring-up entirely (`extWakePending` gates the GNSS block in
+`setup()` — see `gnssInitialized`) for a much faster turnaround, and only re-sleeps after 60 s of
+CAN inactivity. **Known issue:** this detection currently sometimes fails even with `KL15R`
+confirmed low, landing in plain `Off` instead (full GNSS/ADS1115 reinit, slower) — root cause not
+yet found; a debounce attempt around the post-`wfi` `KL15R` read did not fix it and briefly hung
+the board, so it was reverted (see `feedback_teensy41_noinit` memory / git history for the wfi
+timing risk). The behaviour below is written to work correctly regardless of which state it
+lands in, so this is a performance issue, not a functional one.
+
+The response is held until `highestCellV` reflects a real pMBB32 reading rather than the
+zero-initialized post-reset default — every wake is a full reset, so cell voltage data isn't valid
+until the modules have answered at least one `0xFF0000` measurement trigger. `callback_t2()`
+re-checks every 200 ms. While a request is pending, the KLR auto-sleep debounce in `loop()` is
+held off entirely (`gatewayStatusRequestPending`) so the VCU can't re-sleep before answering, no
+matter how long pMBB32 takes; once the response is sent, `loop()` sleeps immediately
+(`gatewayResponseSent`) rather than waiting out the normal 500 ms debounce.
+
+| ID | Description |
+|----|-------------|
+| `0xC84` | Status request from wireless gateway (any payload; sets a pending flag, answered from `callback_t2()`) |
+
+**`0xC85` status response** (8 bytes, sent from `callback_t2()` when a `0xC84` request is pending):
+
+| Bytes | Field | Scale | Notes |
+|-------|-------|-------|-------|
+| 0-1 | Pack voltage | 0.1 V/bit | from `IVTpackVoltage` |
+| 2-3 | Highest cell voltage | raw ADC counts | `highestCellV` |
+| 4-5 | Lowest cell voltage | raw ADC counts | `lowestCellV` |
+| 6 | VCU state | `VCUStateEnum` value | |
+| 7 | Reserved | — | 0 |
 
 **Received**
 
@@ -288,7 +329,7 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 | Device | Bus | Direction | Node ID | Notes |
 |--------|-----|-----------|---------|-------|
 | BMW i4/i5/i7/iX Changeover Valve 64119462114 (#1) | Serial6 (TX6=pin 24, RX6=pin 25) | Slave response | `0x10` *(TBD)* | Byte map TBD from BMW ISTA docs; implemented in `lin.cpp` |
-| BMW i4/i5/i7/iX Changeover Valve 64119462114 (#2) | Serial7 (TX7=pin 29, RX7=pin 28) *(planned)* | Slave response | *(TBD)* | Not yet wired or implemented — pins freed up after dropping the Teensy-direct SIM7080G |
+| BMW i4/i5/i7/iX Changeover Valve 64119462114 (#2) | Serial7 (TX7=pin 29, RX7=pin 28) *(planned)* | Slave response | *(TBD)* | Not yet wired or implemented |
 
 Uses `gicking/LIN master portable` library (`LIN_Master_HardwareSerial`).
 
@@ -323,6 +364,7 @@ Key constants (`defines.h`):
 | Pin | Function |
 |-----|----------|
 | 0 | CAN2 RXD wake input (`CAN2_RX_PIN`) — MCP2562 drives this low on bus activity; falling-edge interrupt wakes VCU from STOP mode for EVCC charge sessions |
+| 30 | CAN3 RXD wake input (`CAN3_RX_PIN`) — same mechanism as pin 0, wakes VCU from STOP mode for wireless gateway status requests |
 | 2 | KL15R input (`KL15R_PIN`) — key position 1, wakes hardware and is sampled in `enterSleep()` to distinguish CAN-wake from key-on wake |
 | 3 | Loop timing debug output |
 | 4 | CAN1 RX timing debug output |
@@ -359,7 +401,7 @@ Turning the key off (KLR low) while in the Off state triggers `enterSleep()` aft
 4. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling.
 5. `CAN_STBY_PIN` (pin 32) is driven HIGH — all three CAN transceivers enter standby mode.
 6. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum; DCDC core voltage drops to 0.95 V), then AHB is switched to the 24 MHz crystal, ARM PLL bypass is enabled (CPU runs at crystal / ARM_PODF ≈ 3 MHz), and the ARM PLL VCO is powered down.
-7. CAN2 RXD pin (pin 0) is reconfigured as GPIO input with pull-up. Rising-edge interrupt on `KLR_PIN` and falling-edge interrupt on `CAN2_RX_PIN` are attached as dual wake sources; SysTick is disabled. The MCP2562 transceiver drives RXD low on dominant bus edges even in standby, so EVCC CAN traffic wakes the VCU without KLR.
+7. CAN2 and CAN3 RXD pins (pins 0 and 30) are reconfigured as GPIO inputs with pull-up. Rising-edge interrupt on `KLR_PIN` and falling-edge interrupts on `CAN2_RX_PIN`/`CAN3_RX_PIN` are attached as three wake sources; SysTick is disabled. The MCP2562 transceivers drive RXD low on dominant bus edges even in standby, so EVCC (CAN2) or wireless gateway (CAN3) traffic wakes the VCU without KLR.
 8. `CCM_CLPCR[LPM]` is set to STOP (0b10) and `SCB_SCR[SLEEPDEEP]` is set — a single `wfi` then enters IMXRT1062 STOP mode, gating internal power domains beyond what WAIT mode achieves.
 
 On wake, a rising edge is asserted on pin 33 (EXTINT0) via DWT cycle-counter delay to start the GNSS hot-start before the Teensy resets; `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals (including clock restoration) cleanly.
@@ -388,7 +430,7 @@ Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable s
        │ └── KL15_OFF (Park btn, speed = 0) from any On state ──> [Off]
        │
        │  EXT_WAKE (CAN2 wake, KL15R low)
-       └──────────────────────────────────── [KL30C] ─── KL15_ON ──> [Off]
+       └──────────────────────────────────── [KL15C] ─── KL15_ON ──> [Off]
                                                 │   └── AC_CHARGE_START ─> [PreCharge]
                                                 └── 60 s inactivity ──> sleep
 ```
@@ -405,33 +447,34 @@ Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable s
 | HeatPack | Pump on; heater on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
 | CoolPack | Pump on; AC exchanger on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
 | Fault | All contactors off; keypad red blink; fault SMS | Button 1 (Park) + speed=0 → `FAULT_CLEAR` (→ Off) |
-| KL30C | Minimal CAN-wake standby (no HV); EVCC heartbeat monitored; KL15R LED edge-detected | KL15 pressed → `KL15_ON` (→ Off); AC plug-in → `AC_CHARGE_START` (→ PreCharge); 60 s inactivity → `enterSleep()` |
+| KL15C | Minimal CAN-wake standby (no HV); EVCC heartbeat monitored; KL15R LED edge-detected | KL15 pressed → `KL15_ON` (→ Off); AC plug-in → `AC_CHARGE_START` (→ PreCharge); 60 s inactivity → `enterSleep()` |
 
 `reducedPowerActive` flag (set by BMS temp fault during Drive/Charge) clamps throttle to `THROTTLE_FAULT_LIMIT` without leaving Drive state.
 
-### KL30C and the sleepMagic mechanism
+### KL15C and the wake-cause mechanism
 
-When the EVCC (or wireless gateway) wakes the VCU over CAN2 with the key out, `enterSleep()` needs to communicate that fact to the `setup()` that runs after the subsequent AIRCR reset — there is no call stack or return address through a software reset.
+When the EVCC (CAN2) or wireless gateway (CAN3) wakes the VCU with the key out, `enterSleep()` needs to communicate that fact to the `setup()` that runs after the subsequent AIRCR reset — there is no call stack or return address through a software reset.
 
-`sleepMagic` is a `DMAMEM volatile uint32_t` stored in OCRAM. OCRAM is ordinary SRAM: it is not cleared by hardware on an AIRCR (software) reset, and the Teensyduino CRT startup skips it (the BSS-zeroing loop covers only the `.bss` section in DTCM, not `.bss.dma` in OCRAM). The value therefore survives the reset intact, acting as a one-shot message from the sleeping firmware to the rebooting firmware.
+The wake cause is carried in `SNVS_LPGPR0`, one of the IMXRT1062's battery-backed low-power general-purpose registers — purpose-built for exactly this (surviving resets and power-down), unlike plain SRAM.
 
 **In `enterSleep()`, just before the AIRCR reset:**
 ```cpp
-sleepMagic = digitalRead(KL15R_PIN) ? 0 : SLEEP_MAGIC_CAN_WAKE;
+SNVS_LPGPR0 = digitalRead(KL15R_PIN) ? 0 : SLEEP_MAGIC_CAN_WAKE;
 ```
-- KL15R HIGH (key was turned while the VCU slept) → `sleepMagic = 0` → normal boot, Off state.
-- KL15R still LOW (CAN2 woke us, key never moved) → `sleepMagic = SLEEP_MAGIC_CAN_WAKE` → KL30C.
+- KL15R HIGH (key was turned while the VCU slept) → `SNVS_LPGPR0 = 0` → normal boot, Off state.
+- KL15R still LOW (CAN2/CAN3 woke us, key never moved) → `SNVS_LPGPR0 = SLEEP_MAGIC_CAN_WAKE` → KL15C.
 
 **In `setup()`:**
 ```cpp
-if (sleepMagic == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN))
+if (SNVS_LPGPR0 == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN))
     extWakePending = true;
-sleepMagic = 0;  // clear immediately — cold-boot after this point must not misfire
+SNVS_LPGPR0 = 0;  // clear immediately — cold-boot after this point must not misfire
 ```
-If `extWakePending` is set, `fsm.trigger(EXT_WAKE)` fires before the main loop, placing the VCU in KL30C instead of Off.
+If `extWakePending` is set, `fsm.trigger(EXT_WAKE)` fires before the main loop, placing the VCU in KL15C instead of Off. The same flag also gates GNSS bring-up in `setup()` — skipped entirely on a CAN wake, since it isn't needed to answer a CAN3 gateway status query and its retry loop is otherwise uncapped (see the CAN3 section above for the known issue where this detection doesn't always fire correctly).
 
-**Platform note — why not `.noinit`?**  
-`.noinit` is the conventional section name for this pattern on AVR and STM32, but the Teensyduino linker script (`imxrt1062_t41.ld`) has no such output section. GNU ld orphans the symbol after `.bss.extram` in the ERAM region (0x70000000). A Teensy 4.1 without external PSRAM has no memory there — any write triggers an immediate hardfault before serial output, leaving the board drawing ~42 mA with no response. `DMAMEM` (which maps to `.dmabuffers` → `.bss.dma`, OCRAM, NOLOAD) is the correct substitute.
+**Why not a DMAMEM/OCRAM variable?** That was the first approach (`DMAMEM volatile uint32_t sleepMagic`, relying on OCRAM surviving an AIRCR software reset — ordinary SRAM isn't cleared by that kind of reset, and the CRT startup's BSS-zeroing loop only covers `.bss` in DTCM, not `.bss.dma` in OCRAM). It compiled and ran without faulting, but on real hardware the value reliably came back as **the same garbage pattern** after a real STOP-mode sleep cycle — reproducible on both a plain KL15R wake and a CAN-triggered wake, so it wasn't a CAN-specific bug. Most likely cause: this project's STOP-mode config drops the CPU to ~3 MHz off the crystal and the DCDC core rail to 0.95 V, which is apparently below OCRAM's safe retention threshold. `SNVS_LPGPR0` sidesteps the question entirely by using a register domain that isn't subject to core RAM power-down at all.
+
+(Earlier still: `.noinit`, the conventional section name for this pattern on AVR/STM32, doesn't exist in the Teensyduino linker script for this chip — GNU ld orphans the symbol into the external-PSRAM ERAM region, which hardfaults immediately on a board without PSRAM fitted.)
 
 ---
 
@@ -531,7 +574,7 @@ Requires [PlatformIO](https://platformio.org/). Open the project folder in VS Co
 - **Brake calibration** — bench-calibrate `BRAKE_THRESHOLD` (ADS1115 counts) against actual sensor output
 - **Throttle calibration** — bench-calibrate `THROTTLE_POT1/2_MIN/MAX` (ADS1115 counts; current values are ×8 approximations of old 12-bit readings)
 - **EVCC calibration** — set `EVCC_CELL_V_EMPTY` / `EVCC_CELL_V_FULL` (pMBB32 raw counts) for actual cell chemistry; set `EVCC_MAX_VOLTAGE_x10` and `EVCC_MAX_CURRENT_x10` for pack charge limits
-- **EVCC AC charging** — AC session detection and EVCC handshake implemented: `New_Charge_Session` (0x68001) `Plug_and_pins` ≥ 3 or `EVSE_Information` (0x600) Pins 1–3 → `evccIsACSession`; `AC_Control` (0x601) → `acReadyToDeliver`; `AC_Status` (0x611) `Ready_To_Charge` sent every 62.5 ms; VCU closes main contactors via KL30C → PreCharge → Charge. Still pending: confirm actual Pins value sent by EVCC on AC plug-in by CAN sniff; split `VCU_STATE_CHARGE` into `VCU_STATE_DCFC` and `VCU_STATE_AC_CHARGE`; implement `CHARGE_OFF` transition from EVCC session-end event
+- **EVCC AC charging** — AC session detection and EVCC handshake implemented: `New_Charge_Session` (0x68001) `Plug_and_pins` ≥ 3 or `EVSE_Information` (0x600) Pins 1–3 → `evccIsACSession`; `AC_Control` (0x601) → `acReadyToDeliver`; `AC_Status` (0x611) `Ready_To_Charge` sent every 62.5 ms; VCU closes main contactors via KL15C → PreCharge → Charge. Still pending: confirm actual Pins value sent by EVCC on AC plug-in by CAN sniff; split `VCU_STATE_CHARGE` into `VCU_STATE_DCFC` and `VCU_STATE_AC_CHARGE`; implement `CHARGE_OFF` transition from EVCC session-end event
 - **Chery New Energy OBC+DCDC** — hardware ordered, not yet fitted; protocol decoded from vendor DBC (see [CAN2](#can2--500-kbps)) but not yet wired into `can2Sniff()` / `callback_t2()`. Once fitted: confirm actual bus/baud rate, send `VCU_DCDC_Command` (always-on `DCDC_Enable`, target 13.8–14.4 V) and `VCU_OBC_Command` (forward target V/I and start/stop from EVCC `AC_Control`/`Charging_Loop`), decode `DCDC_Telemetry` / `OBC_Telemetry` into new globals, replaces the earlier Elcon UHF-CAN-312 OBC placeholder
 - **EMP WP29 pumps** — confirm pump J1939 source address (`EMP_WP29_ADDR`, currently `0x8A`) matches both pumps via CAN sniffer; remove CH3 passive pre-charge relay command from `PreCharge_enter()` once active pre-charge board is fitted
 - **BMW LIN valve** — confirm LIN node address (`LIN_VALVE_ID`) and frame spec from BMW ISTA docs; assign `LIN_EN_PIN`; wire and implement the second valve's LIN bus on Serial7 (TX7=29, RX7=28)

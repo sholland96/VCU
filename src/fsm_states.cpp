@@ -1,6 +1,6 @@
 /* fsm_states.cpp — arduino-fsm state enter/exit/check callbacks and
  * transition callbacks for the VCU state machine (Off/PreCharge/Idle/
- * Drive/Charge/Fault/HeatPack/CoolPack/KL30C).
+ * Drive/Charge/Fault/HeatPack/CoolPack/KL15C).
  */
 #include <Arduino.h>
 #include "defines.h"
@@ -13,6 +13,7 @@ void Off_enter()
   Serial.println("Entering Off state");
   VCUstate = VCU_STATE_OFF;
   sdLogEvent("STATE:OFF");
+  klrLowSince = millis(); // reset debounce — give a fresh 500ms grace period before re-sleeping
 }
 
 void Off_exit()
@@ -325,29 +326,29 @@ void on_trans_PreCharge_Charge()  { Serial.println("PreCharge OK → Charge"); }
 void on_trans_PreCharge_Fault()   { Serial.println("PreCharge FAILED → Fault"); }
 void on_trans_Fault_Off()         { Serial.println("Fault cleared → Off"); }
 
-// ── KL30C — external CAN wake standby ────────────────────────────────────────
+// ── KL15C — external CAN wake standby ────────────────────────────────────────
 // Entered when the VCU wakes from sleep via CAN2 activity (EVCC or wireless
 // gateway) with KL15R still LOW (key not turned). No HV contactors are closed.
 // Exits to Off on KL15_ON (button 5), which then immediately proceeds to
 // PreCharge since KL15state is already true.
 // Sleeps when EVCCsessionActive is false, KL15R is low, and no EVCC heartbeat
-// or gateway frame has been seen for KL30C_SLEEP_TIMEOUT_MS.
+// or gateway frame has been seen for KL15C_SLEEP_TIMEOUT_MS.
 
-void KL30C_enter() {
-  Serial.println("Entering KL30C state");
-  VCUstate          = VCU_STATE_KL30C;
-  sdLogEvent("STATE:KL30C");
-  kl30cKL15Rstate   = false; // force LED edge detect on first check_KL30C() call
+void KL15C_enter() {
+  Serial.println("Entering KL15C state");
+  VCUstate          = VCU_STATE_KL15C;
+  sdLogEvent("STATE:KL15C");
+  kl15cKL15Rstate   = false; // force LED edge detect on first check_KL15C() call
   lastExtActivityMs = millis(); // reset timeout — start counting from now
   PDUmsg1.buf[0]    = 0x00; // CH1 off — negative contactor
   PDUmsg1.buf[3]    = 0x00; // CH4 off — positive contactor
 }
 
-void check_KL30C() {
+void check_KL15C() {
   // Flash button 1 (Park/P) LED while KL15R is high to signal standby mode.
   bool kl15rNow = digitalRead(KL15R_PIN);
-  if (kl15rNow != kl30cKL15Rstate) {
-    kl30cKL15Rstate     = kl15rNow;
+  if (kl15rNow != kl15cKL15Rstate) {
+    kl15cKL15Rstate     = kl15rNow;
     msg2.id             = 0x18EF2100;
     msg2.flags.extended = 1;
     msg2.len            = 8;
@@ -363,7 +364,7 @@ void check_KL30C() {
   }
 
   // AC plug detected → close main contactors via pre-charge sequence.
-  // DC sessions leave EVCC to handle its own contactors; VCU stays in KL30C.
+  // DC sessions leave EVCC to handle its own contactors; VCU stays in KL15C.
   if (EVCCsessionActive && evccIsACSession) {
     fsm.trigger(AC_CHARGE_START);
     return;
@@ -377,16 +378,16 @@ void check_KL30C() {
   }
 
   // Sleep when: no active EVCC session, KL15R is low, and no external activity
-  // for KL30C_SLEEP_TIMEOUT_MS.
+  // for KL15C_SLEEP_TIMEOUT_MS.
   if (!EVCCsessionActive && !kl15rNow &&
-      millis() - lastExtActivityMs > KL30C_SLEEP_TIMEOUT_MS) {
-    Serial.println("KL30C timeout — sleeping");
+      millis() - lastExtActivityMs > KL15C_SLEEP_TIMEOUT_MS) {
+    Serial.println("KL15C timeout — sleeping");
     enterSleep();
   }
 }
 
-void KL30C_exit() {
-  Serial.println("Exiting KL30C state");
+void KL15C_exit() {
+  Serial.println("Exiting KL15C state");
   msg2.id             = 0x18EF2100;
   msg2.flags.extended = 1;
   msg2.len            = 8;

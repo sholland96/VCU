@@ -164,6 +164,12 @@ volatile bool     pMBB32ghostSA   = false;
 // Bitmask of frame types (ft=01..0C → bits 0..11) seen per module since last check.
 volatile uint16_t pMBB32ftSeen[3] = {0, 0, 0};
 
+// Set by can3Sniff() when a 0xC84 status request arrives from the wireless gateway;
+// answered with a 0xC85 response the next time callback_t2() runs.
+volatile bool gatewayStatusRequestPending = false;
+// Set right after callback_t2() sends the 0xC85 response; consumed by loop().
+volatile bool gatewayResponseSent = false;
+
 /* t2 Callback
 * This runs every t2 period (200ms).
 * Tasks performed here:
@@ -173,6 +179,30 @@ volatile uint16_t pMBB32ftSeen[3] = {0, 0, 0};
 *   4. Read isolation state from SIM100MOD
 */
 void callback_t2() {
+  // Wait for at least one real pMBB32 reading post-boot before answering — right after a
+  // wake/reset, highestCellV/lowestCellV are still zero-initialized, not fresh BMS data,
+  // until the modules have responded to a 0xFF0000 trigger at least once. Left pending
+  // (retried every 200ms) rather than answering with obviously-invalid zeros.
+  if (gatewayStatusRequestPending && highestCellV > 0) {
+    gatewayStatusRequestPending = false;
+    msg3.flags.extended = 1;
+    msg3.id  = 0xC85; // status response to wireless gateway
+    msg3.len = 8;
+    uint16_t packV10 = (uint16_t)(IVTpackVoltage / 100); // mV -> 0.1V
+    msg3.buf[0] = packV10 & 0xFF;
+    msg3.buf[1] = (packV10 >> 8) & 0xFF;
+    msg3.buf[2] = highestCellV & 0xFF;
+    msg3.buf[3] = (highestCellV >> 8) & 0xFF;
+    msg3.buf[4] = lowestCellV & 0xFF;
+    msg3.buf[5] = (lowestCellV >> 8) & 0xFF;
+    msg3.buf[6] = (uint8_t)VCUstate;
+    msg3.buf[7] = 0; // reserved
+    can3.write(msg3);
+    gatewayResponseSent = true; // loop() sleeps promptly instead of waiting out the KLR debounce
+    Serial.printf("CAN3: sent 0xC85 response (packV=%u x0.1V, hiCell=%u, loCell=%u, state=%u)\n",
+                  packV10, highestCellV, lowestCellV, (uint8_t)VCUstate);
+  }
+
   // request all cell and temperature measurements every t2 period
   msg1.id = 0xFF0000;
   msg1.flags.extended = 1;

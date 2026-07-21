@@ -1,5 +1,5 @@
 /* sleep.cpp — deep-sleep (STOP mode) entry: gates clocks/peripherals,
- * arms KL15R/CAN2 wake sources, then WFI + AIRCR reset on wake.
+ * arms KL15R/CAN2/CAN3 wake sources, then WFI + AIRCR reset on wake.
  */
 #include <Arduino.h>
 #include "defines.h"
@@ -27,9 +27,14 @@ void enterSleep() {
   digitalWriteFast(LED_BUILTIN, LOW);
 
 #ifdef UBLOX_GNSS
-  // I2C cannot wake NEO-M8M from backup mode; EXTINT0 is the supported source.
-  myGNSS.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_EXTINT0);
-  delay(500);
+  // Only if GNSS was actually brought up this boot — skipped entirely on a CAN-wake cycle
+  // that never called myGNSS.begin() (see setup()); the library's internal I2C port pointer
+  // may be unset otherwise.
+  if (gnssInitialized) {
+    // I2C cannot wake NEO-M8M from backup mode; EXTINT0 is the supported source.
+    myGNSS.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_EXTINT0);
+    delay(500);
+  }
 #endif
 
   // Assert CAN transceiver standby — puts all three transceivers into low-power mode.
@@ -41,9 +46,10 @@ void enterSleep() {
                  CCM_CCGR0_CAN2(3) | CCM_CCGR0_CAN2_SERIAL(3));
   CCM_CCGR7 &= ~(CCM_CCGR7_CAN3(3) | CCM_CCGR7_CAN3_SERIAL(3));
 
-  // Reconfigure CAN2 RXD pin as GPIO input (CAN clock already gated).
-  // MCP2562 in standby drives RXD low on dominant bus edges — triggers the interrupt below.
+  // Reconfigure CAN2/CAN3 RXD pins as GPIO input (CAN clocks already gated).
+  // MCP2562 in standby drives RXD low on dominant bus edges — triggers the interrupts below.
   pinMode(CAN2_RX_PIN, INPUT_PULLUP);
+  pinMode(CAN3_RX_PIN, INPUT_PULLUP);
 
   // 2. Drop CPU to ARM PLL minimum (~16.2 MHz, 0.95 V DCDC).
   set_arm_clock(16000000);
@@ -67,10 +73,12 @@ void enterSleep() {
   //    immediately — no race condition.
   attachInterrupt(digitalPinToInterrupt(KL15R_PIN),  [](){}, RISING);   // key-on
   attachInterrupt(digitalPinToInterrupt(CAN2_RX_PIN), [](){}, FALLING); // EVCC bus activity
+  attachInterrupt(digitalPinToInterrupt(CAN3_RX_PIN), [](){}, FALLING); // wireless gateway activity
   SYST_CSR &= ~1u;  // disable SysTick (bit 0 = ENABLE) — stops 1 ms wakeups
 
   // STOP mode — gates more internal domains than WAIT mode.
-  // Wake sources: KL15R_PIN rising edge (key-on) or CAN2_RX_PIN falling edge (EVCC).
+  // Wake sources: KL15R_PIN rising edge (key-on), CAN2_RX_PIN falling edge (EVCC),
+  // or CAN3_RX_PIN falling edge (wireless gateway).
   // AIRCR reset on wake restores all registers, so no clock restore needed.
   // To revert to WAIT mode: delete the two lines below.
   CCM_CLPCR = (CCM_CLPCR & ~0x3u) | 0x2u;  // LPM = 0b10 (STOP)
@@ -79,21 +87,23 @@ void enterSleep() {
   asm volatile("dsb");
   asm volatile("isb");
   if (!digitalRead(KL15R_PIN)) {
-    asm volatile("wfi");  // sleep until KL15R rising edge or CAN2 falling edge
+    asm volatile("wfi");  // sleep until KL15R rising edge or CAN2/CAN3 falling edge
   }
 
   asm volatile("dsb");
 
-  // Set sleepMagic based on which signal woke us.
-  // KL15R HIGH = key was turned → normal boot; KL15R still LOW = CAN2 woke us → KL30C.
-  sleepMagic = digitalRead(KL15R_PIN) ? 0 : SLEEP_MAGIC_CAN_WAKE;
+  // Set SNVS_LPGPR0 based on which signal woke us.
+  // KL15R HIGH = key was turned → normal boot; KL15R still LOW = CAN2/CAN3 woke us → KL15C.
+  SNVS_LPGPR0 = digitalRead(KL15R_PIN) ? 0 : SLEEP_MAGIC_CAN_WAKE;
 
 #ifdef UBLOX_GNSS
-  // Rising edge on EXTINT0 wakes the GNSS module for a hot-start while the Teensy resets.
-  // Use DWT cycle counter — independent of SysTick and the stale F_CPU_ACTUAL.
-  // At ~3 MHz (crystal / ARM_PODF=8), 150 000 cycles ≈ 50 ms.
-  digitalWrite(GNSS_EXTINT_PIN, HIGH);
-  {
+  // Only if GNSS was actually brought up this boot — nothing to wake otherwise, and the
+  // module's state (running or already in backup mode from an earlier cycle) is unaffected.
+  if (gnssInitialized) {
+    // Rising edge on EXTINT0 wakes the GNSS module for a hot-start while the Teensy resets.
+    // Use DWT cycle counter — independent of SysTick and the stale F_CPU_ACTUAL.
+    // At ~3 MHz (crystal / ARM_PODF=8), 150 000 cycles ≈ 50 ms.
+    digitalWrite(GNSS_EXTINT_PIN, HIGH);
     uint32_t t = ARM_DWT_CYCCNT;
     while (ARM_DWT_CYCCNT - t < 150000u);
   }

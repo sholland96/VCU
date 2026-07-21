@@ -29,13 +29,11 @@ CAN_message_t LDUmsg;      // 0x201: pot (bytes 0-1) + canio (byte 4), sent ever
 // Used pins
 #define LED_PIN 13
 
-// DMAMEM places sleepMagic in OCRAM (.bss.dma, NOLOAD): valid writable RAM, not zeroed by CRT
-// startup, survives AIRCR reset. Used in enterSleep() and setup() to detect CAN-wake vs key-on.
-DMAMEM volatile uint32_t sleepMagic;
-
 bool     extWakePending   = false; // set in setup() when CAN wake detected; consumed by FSM
-uint32_t lastExtActivityMs = 0;    // last EVCC heartbeat or gateway frame (for KL30C timeout)
-bool     kl30cKL15Rstate  = false; // tracks KL15R pin state inside KL30C for LED edge detect
+uint32_t lastExtActivityMs = 0;    // last EVCC heartbeat or gateway frame (for KL15C timeout)
+uint32_t klrLowSince      = 0;     // reset in Off_enter() — start of Off-state KLR debounce
+bool     gnssInitialized  = false; // set in setup() only if GNSS bring-up actually ran this boot
+bool     kl15cKL15Rstate  = false; // tracks KL15R pin state inside KL15C for LED edge detect
 bool     evccIsACSession  = false; // true when plug type is AC → VCU closes main contactors
 bool     acReadyToDeliver = false; // set by AC_Control (0x601); EVCC grants AC power delivery
 VCUStateEnum VCUstate = VCU_STATE_OFF;
@@ -48,7 +46,7 @@ State state_Charge(&Charge_enter, &check_Charge, &Charge_exit);
 State state_HeatPack(&HeatPack_enter, &check_HeatPack, &HeatPack_exit);
 State state_CoolPack(&CoolPack_enter, &check_CoolPack, &CoolPack_exit);
 State state_Fault(&Fault_enter, &check_Fault, &Fault_exit);
-State state_KL30C(&KL30C_enter, &check_KL30C, &KL30C_exit);
+State state_KL15C(&KL15C_enter, &check_KL15C, &KL15C_exit);
 Fsm fsm(&state_Off);
 
 void wakepMBB32(){
@@ -143,12 +141,19 @@ void loop() {
   // Gives the EVCC time to send New_Charge_Session (0x68001) after a CAN2 wake
   // before sleep is re-entered. Normal key-off behaviour is unchanged.
   // enterSleep() returns immediately if EVCCsessionActive (active charge session).
+  // Also stays awake while a wireless-gateway status request is still waiting on a fresh
+  // pMBB32 reading (see callback_t2()) — otherwise it can re-sleep before ever answering —
+  // and sleeps promptly (skipping the debounce wait) right after that response is sent.
   {
-    static uint32_t klrLowSince = 0;
     if (digitalRead(KL15R_PIN)) {
       klrLowSince = millis();
-    } else if (VCUstate == VCU_STATE_OFF && millis() - klrLowSince > 500) {
-      enterSleep();
+    } else if (VCUstate == VCU_STATE_OFF) {
+      if (gatewayResponseSent) {
+        gatewayResponseSent = false;
+        enterSleep();
+      } else if (!gatewayStatusRequestPending && millis() - klrLowSince > 500) {
+        enterSleep();
+      }
     }
   }
 
@@ -177,9 +182,10 @@ void loop() {
   }
 
 #ifdef UBLOX_GNSS
-  myGNSS.checkUblox();
-  myGNSS.checkCallbacks();
-
+  if (gnssInitialized) {
+    myGNSS.checkUblox();
+    myGNSS.checkCallbacks();
+  }
 #endif
 
 fsm.run_machine();
