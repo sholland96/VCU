@@ -12,6 +12,7 @@
 #include "fsm_states.h"
 #include "can_handlers.h"
 #include "callbacks.h"
+#include "realdash_tcp.h"
 
 using namespace TeensyTimerTool;
 IntervalTimer  t0;       // PIT channel — 10ms LDU torque command (highest priority)
@@ -187,6 +188,8 @@ void loop() {
     myGNSS.checkCallbacks();
   }
 #endif
+
+  realdashService(); // accept/replace the RealDash TCP client (Odroid dashboard)
 
 fsm.run_machine();
 

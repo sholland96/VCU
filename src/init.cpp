@@ -10,14 +10,19 @@
 #include "fsm_states.h"
 #include "can_handlers.h"
 #include "callbacks.h"
+#include "realdash_tcp.h"
 
 using namespace TeensyTimerTool;
 
 #ifdef UBLOX_GNSS
 void printPVTdata(UBX_NAV_PVT_data_t *ubxDataStruct)
 {
-    GPSaltitude = ubxDataStruct->hMSL;
-    groundSpeed = ubxDataStruct->gSpeed;
+    // hMSL is mm above sea level; convert to feet at the source so the value comfortably
+    // fits the 16 bits sent on the wire (display.cpp only sends the low 2 bytes of
+    // GPSaltitude) — raw mm wraps past ~215 ft, which is what caused the ~16-17000 reading.
+    GPSaltitude = ubxDataStruct->hMSL / 305; // mm -> ft (1 ft = 304.8 mm)
+    // gSpeed is mm/s; convert to mph at the source for the same reason as GPSaltitude above.
+    groundSpeed = (uint16_t)(ubxDataStruct->gSpeed * 0.00223694);
     fixType     = ubxDataStruct->fixType;
 
     static uint32_t lastPrint = 0;
@@ -131,6 +136,13 @@ void setup() {
     Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
   }
 #endif
+
+  // RealDash-over-Ethernet dashboard feed — skipped on a CAN-triggered wake for the same
+  // reason as GNSS above: not needed to answer a pMBB32 status query, and no gateway retry
+  // timeout can help if bring-up here ever stalls the fast-response path.
+  if (!extWakePending) {
+    realdashInit();
+  }
 
   // ADS1115 — I2C0 shares Wire with GNSS (already started above).
   if (!ads.begin(ADS1115_ADDR)) {

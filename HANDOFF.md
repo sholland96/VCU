@@ -4,6 +4,102 @@ Snapshot of where this VCU firmware stands, for picking up development on anothe
 See `README.md` for the full hardware/protocol reference — this file is about *process*: what
 just happened, what's confirmed working, and what's still open.
 
+## RealDash-over-Ethernet feed — confirmed working on hardware
+
+Drafted overnight (autonomous, with the user's explicit go-ahead), then flashed and verified
+together the next day. Frame data confirmed flowing correctly over TCP (captured raw bytes on
+the Odroid side — tag, CAN IDs, and payloads all check out, e.g. `44 33 22 11 80 0c 00 00 ...`
+= tag + `0xC80` little-endian). RealDash itself is now configured and confirmed working:
+adapter type is **Adapters (CAN/LIN) -> RealDash CAN -> WiFi**, IP `192.168.10.10` port `35000`
+(NOT SocketCAN — that's for a real kernel `can0` device, not a WiFi/TCP feed like this one), CAN
+description file `dbc/realdash_vcu.xml` imported via RealDash's file browser (needed `yad`
+installed on the Odroid — RealDash's Qt file dialog has no fallback without one of
+kdialog/yad/Xdialog on a bare Openbox setup). RealDash's own "configuration frame" (CAN
+speed/mode, sent RealDash -> device) is intentionally left disabled — irrelevant here since this
+device doesn't read anything back from the socket. Standard `targetId`-based fields (RPM,
+throttle/TPS) show up on default layouts automatically; the custom `name="VCU: ..."` fields need
+gauges manually added under RealDash's "ECU Specific" input category to be visible at all.
+
+**Bug found and fixed during bring-up:** the first version called `realdashSendFrame()` (a
+direct TCP write) straight from `displayStatus()`, which runs inside `callback_t1()` — a
+hardware-timer ISR, same category as `callback_t2()` (where SD-card I/O was already known to be
+ISR-unsafe, see the CAN3 gateway-wake bug list above). QNEthernet's TCP stack is likewise not
+ISR-safe: the connection worked fine (TCP handshake completed, `nc -zv` succeeded) but zero
+bytes ever actually arrived — writes were silently no-oping from ISR context, no crash, no
+error. Fixed the same way this codebase already fixes this class of bug: `displayStatus()` now
+calls `realdashQueueFrame()` (ISR-safe, only buffers 4×8 bytes into a fixed array), and the
+actual `EthernetClient::write()` calls happen in `realdashService()` from `loop()` instead. If
+another ISR-context feature is added here later, don't repeat this — anything touching
+QNEthernet's client/server objects must run from `loop()`, not a `TeensyTimerTool` callback.
+
+**Goal:** feed RealDash on the Odroid M2 display over the Teensy-Odroid Ethernet link (the same
+direct point-to-point cable brought up and confirmed working earlier this session with the
+`ethernet_test` sketch), instead of requiring a physical CAN-to-USB adapter. This is additive —
+the existing physical CAN3 feed to RealDash/the wireless gateway is untouched.
+
+**Protocol (researched, not guessed):** RealDash's native network transport is a TCP server on
+the device (RealDash connects as the client) on port 35000, streaming "44" frames: 4-byte tag
+`0x44,0x33,0x22,0x11` + 4-byte little-endian CAN ID + up to 8 payload bytes, no CRC. Notably,
+`src/globals.cpp` already had `uint8_t serialBlockTag[] = {0x44,0x33,0x22,0x11};` sitting
+unused — this is exactly RealDash's tag. Confirmed with the user: this dates back to an earlier
+attempt at RealDash-over-Ethernet, back when the Odroid M2 ran Android and Ethernet couldn't be
+gotten working there at all. The Odroid runs Armbian now (switched earlier this session during
+the display/touchscreen bring-up), which is presumably what actually unblocked it this time.
+Reused the dormant constant.
+
+**What was added:**
+- `include/realdash_tcp.h` / `src/realdash_tcp.cpp` — `EthernetServer` on port 35000 (QNEthernet),
+  single-client (a new connection replaces the old one). `realdashQueueFrame(id, payload, len)`
+  is the public, ISR-safe entry point — see the bug note above for why the send itself had to
+  move to `realdashService()`.
+- `src/display.cpp` — one `realdashQueueFrame(...)` call added after each of the four existing
+  `can3.write(msg3)` calls in `displayStatus()`, reusing the exact same `msg3.buf` already built
+  for CAN3. No change to what's computed, only where it's also sent.
+- `src/init.cpp` — `realdashInit()` (static IP `192.168.10.10`/`.1`, matches the proven
+  `ethernet_test` addresses) called from `setup()`, guarded by `if (!extWakePending)` — same
+  reasoning as the existing GNSS guard: skip anything non-essential on the CAN-wake fast-response
+  path so it can't add latency or risk a stall there.
+- `src/main.cpp` — `realdashService()` added to `loop()` (accepts new/replaced clients, flushes
+  queued frames to the socket).
+- `platformio.ini` — added `ssilverman/QNEthernet` to the main `teensy41` env's `lib_deps`
+  (previously only in the standalone `ethernet_test` env).
+- `dbc/realdash_vcu.xml` — RealDash CAN-definition file to import on the Odroid, mapping all
+  four frames' bytes to gauges/custom ECU-specific inputs. Researched RealDash's actual XML
+  schema (janimm/RealDash-extras on GitHub) rather than guessing the format.
+
+**Flashed and confirmed on hardware.** Frame bytes captured on the Odroid side via `nc`/`od`
+matched the protocol exactly. Nothing committed yet.
+
+**Bug found and fixed after the initial bring-up: GPS altitude/speed truncation.** Once RealDash
+was actually configured and gauges added, altitude showed ~16,000-17,000 ft (obviously wrong).
+Root cause was two stacked bugs in a code path unrelated to this feature's own changes:
+`printPVTdata()` in `init.cpp` (the GNSS PVT callback) set `GPSaltitude` directly from `hMSL`,
+which is **millimeters**, not feet — and `display.cpp` only ever sent the low 16 bits of that
+32-bit value, so real altitude above ~215 ft wrapped around. Ground speed had the same class of
+bug, worse: `groundSpeed` was set directly from `gSpeed` (mm/s, not mph), and `display.cpp`
+hardcoded the high byte to `0`, truncating it to a single byte (overflows past ~0.6 mph). Fixed
+both at the source in `printPVTdata()` (mm→ft, mm/s→mph, same conversion factors the codebase
+already had sitting in dead/commented-out lines) and fixed the ground-speed packing bug in
+`display.cpp`. Flashed and confirmed — altitude now reads correctly.
+
+**Remaining known gap, NOT fixed, pre-dates this feature:** `displayStatus()` still sends mostly
+placeholder/test data for everything else — `rpm` is a free-running test ramp (`rpm += 100`),
+`IVTpackVoltage`/`batteryVoltage` are hardcoded constants (3840 / 1255), pack current is derived
+from a test power counter, the motor/pack temp byte is a hardcoded `21`, throttle is hardcoded to
+`100`. RealDash will show fake/frozen numbers for those fields until `displayStatus()` is wired
+to the real `IVTpackVoltage`/`IVTpackCurrent`/etc. variables that already exist and are already
+populated correctly elsewhere in the codebase. Cell voltages, ground speed, and GPS altitude/fix
+type are the exceptions — those are real, live data now.
+
+**Still open — not yet done:**
+1. Confirm a plain KL15R (key-on) boot still reaches `RealDash: TCP server listening...` at the
+   same point GNSS normally comes up (i.e. this didn't silently break the existing
+   GNSS-skip-on-CAN-wake timing) — not explicitly checked, only inferred from normal-looking
+   `pMBB32`/GNSS heartbeat prints after flashing.
+2. Confirm a CAN3 gateway wake (`0xC84`/`0xC85`) still behaves exactly as before —
+   `realdashInit()` is skipped on that path, so it shouldn't be affected, but worth confirming
+   given the CAN-wake path's history of subtle regressions this session.
+
 ## What just happened (this session)
 
 1. **Incremental `main.cpp` split** — the original 2226-line monolith is now split into

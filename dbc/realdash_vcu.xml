@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RealDash CAN description file for the VCU's Ethernet dashboard feed (see realdash_tcp.cpp).
+  Import into RealDash on the Odroid, then point RealDash's data source at:
+    Network (TCP) -> IP 192.168.10.10, port 35000
+  Frame IDs/byte layout mirror display.cpp's displayStatus() exactly (same data also still
+  goes out on physical CAN3) - see README's CAN3 section for the authoritative byte table.
+
+  Confirmed working on hardware (frame bytes verified byte-for-byte on the Odroid side).
+  RPM, Power, Motor/Pack Temp, Pack Voltage/Current, and 12V Battery are still
+  placeholder/test values in current firmware (see the per-field comments) - conversions
+  for those are best-guess from the documented units in include/defines.h, not verified
+  against real sensor data. Cell voltages, ground speed, and GPS altitude/fix type ARE
+  real, live data.
+-->
+<RealDashCAN version="2">
+  <frames>
+    <frame id="0xC80">
+      <!-- RPM counter is a firmware test ramp right now (rpm += 100 in display.cpp), not a
+           real motor speed reading - wire it to LDUrpm once that's confirmed against the
+           inverter. targetId 37 = RPM (matches RealDash's own bundled Arduino example, which
+           this project's 0xC80-0xC83 IDs were evidently modeled on). -->
+      <value targetId="37" offset="0" length="2"></value>
+
+      <!-- Power (kW x10 on the wire, "kW = V/10" per display.cpp comment). Also currently
+           driven by a free-running test counter, not real IVTpower. No matching RealDash
+           targetId for a generic power gauge - added as a custom ECU-specific input. -->
+      <value name="VCU: Power" units="kW" offset="2" length="2" conversion="V/10"></value>
+
+      <!-- Hardcoded to a fixed test value (21) in display.cpp - not read from any real
+           sensor yet. Conversion below matches the "°C = V-100" scheme used elsewhere in
+           this project once a real temperature source is wired in. -->
+      <value name="VCU: Motor/Pack Temp (placeholder, unwired)" units="C" offset="4" length="2" conversion="V-100"></value>
+
+      <!-- Real signal: throttle 0-100%, sent as V/10 per "TPS = V/10" comment. targetId 42 = TPS. -->
+      <value targetId="42" units="%" offset="6" length="2" conversion="V/10"></value>
+    </frame>
+
+    <frame id="0xC81">
+      <!-- Pack voltage / current / 12V battery are ALL hardcoded test values in display.cpp
+           right now (IVTpackVoltage=3840, batteryVoltage=1255, current derived from a test
+           power counter) - not the real IVT/BMS readings, despite the variable names.
+           Units/scale below are guesses pending real wiring; do not trust these numbers. -->
+      <value name="VCU: Pack Voltage (placeholder, unwired)" offset="2" length="2"></value>
+      <value name="VCU: Pack Current (placeholder, unwired)" offset="4" length="2" signed="true"></value>
+      <value name="VCU: 12V Battery (placeholder, unwired)" offset="6" length="2"></value>
+    </frame>
+
+    <frame id="0xC82">
+      <!-- Cell voltages ARE real pMBB32 data (16-bit ADC counts, 5V ref -> 1 count = ADCres
+           = 0.0000763 V, see globals.cpp). -->
+      <value name="VCU: Highest Cell V" units="V" offset="0" length="2" conversion="V*0.000076295"></value>
+      <value name="VCU: Lowest Cell V"  units="V" offset="2" length="2" conversion="V*0.000076295"></value>
+
+      <!-- Ground speed: live GNSS data, converted mm/s -> mph in init.cpp's printPVTdata()
+           (was previously truncated to 1 byte on the wire - fixed alongside this XML).
+           targetId 64 = vehicle speed. -->
+      <value targetId="64" units="mph" offset="4" length="2"></value>
+
+      <!-- GPS altitude: live GNSS data, converted mm -> ft in init.cpp's printPVTdata()
+           (previously raw mm truncated to 16 bits, wrapped past ~215 ft - fixed). -->
+      <value name="VCU: GPS Altitude" units="ft" offset="6" length="2"></value>
+    </frame>
+
+    <frame id="0xC83">
+      <value name="VCU: Cell Delta V" units="V" offset="0" length="2" conversion="V*0.000076295"></value>
+
+      <!-- SIM100MOD isolation/temp scale not confirmed against SIM100_v08.dbc - treat as raw
+           until cross-checked. -->
+      <value name="VCU: Isolation Resistance (unconfirmed scale)" offset="2" length="2"></value>
+      <value name="VCU: SIM100MOD Temp (unconfirmed scale)" offset="4" length="2"></value>
+
+      <value name="VCU: GPS Fix Type" offset="6" length="1"></value>
+    </frame>
+  </frames>
+</RealDashCAN>

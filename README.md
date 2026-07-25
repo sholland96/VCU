@@ -264,6 +264,19 @@ Devices: Wireless gateway (Arduino Portenta H7 + Quectel 4G module — handles S
 | `0xC83` | Cell delta voltage, SIM100MOD isolation, SIM100MOD temperature, GPS fix type |
 | `0xC85` | Status response to gateway status request (see below) |
 
+**RealDash-over-Ethernet feed** — the same `0xC80`-`0xC83` data is also mirrored over a direct
+Ethernet link to the Odroid M2 display (`realdash_tcp.cpp`), so RealDash can consume it directly
+over TCP instead of needing a physical CAN-to-USB adapter. VCU runs a TCP server on
+`192.168.10.10:35000` (Odroid at `192.168.10.1`, direct point-to-point cable, static IPs, no
+DHCP); RealDash connects as the client and streams RealDash's native "44" frame format (4-byte
+tag `0x44,0x33,0x22,0x11` + 4-byte little-endian CAN ID + 8-byte payload). CAN definition file
+for RealDash to import: `dbc/realdash_vcu.xml`. Skipped on CAN-wake (`KL15C`) boots along with
+GNSS, to keep that path's response time unaffected. Confirmed on hardware; `groundSpeed`
+(mph) and `GPSaltitude` (ft) are converted from the GNSS module's raw mm/s and mm units in
+`printPVTdata()` (`init.cpp`) before being packed into `0xC82`. RPM, power, motor/pack temp,
+pack voltage/current, and 12 V battery in `displayStatus()` are still placeholder/test values,
+not real sensor data — TODO.
+
 **`0xC79` SMS message codes** (byte 0, 1 byte total) — the gateway sends a canned text for each code:
 
 | Code | Message | Sent from |
@@ -532,7 +545,8 @@ t0 runs at the highest ARM Cortex-M7 NVIC priority (`priority(0)`) and preempts 
 | `can_handlers.cpp` | `can1` / `can2` / `can3` `FlexCAN_T4` objects, `can1Sniff` / `can2Sniff` / `can3Sniff`, `initCAN()` |
 | `fsm_states.cpp` | FSM state enter/exit/check callbacks and `on_trans_*` transition callbacks |
 | `sleep.cpp` | `enterSleep()` — STOP-mode sleep sequence (see [KLR region](#klr-region-key-position-1)) |
-| `display.cpp` | `displayStatus()` — RealDash CAN3 update |
+| `display.cpp` | `displayStatus()` — RealDash CAN3 update, also mirrors frames to the Ethernet link via `realdash_tcp.cpp` |
+| `realdash_tcp.cpp` | RealDash-over-Ethernet TCP server (`realdashInit`, `realdashService`, `realdashQueueFrame`) — see CAN3 section |
 | `sdlog.cpp` | SD card logging (`sdInit`, `sdLogData`, `sdQueueEventISR`, `sdDrainEvents`) |
 | `lin.cpp` | LIN valve I/O (`linInit`, `linReadValve`, `linWriteValve`) |
 | `throttle.cpp` | `readThrottle()` — the throttle pipeline (see [Throttle Pipeline](#throttle-pipeline)) |
