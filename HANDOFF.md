@@ -4,6 +4,57 @@ Snapshot of where this VCU firmware stands, for picking up development on anothe
 See `README.md` for the full hardware/protocol reference — this file is about *process*: what
 just happened, what's confirmed working, and what's still open.
 
+## Sleep/wake reliability — root causes found and fixed on hardware
+
+Started from a report that Teensy standby current had risen from ~4 mA to ~23 mA once the
+RealDash-over-Ethernet feed was added. Chasing that regression (a direct Ethernet PHY register
+power-down in `enterSleep()`) caused the board to stop waking entirely, and — critically —
+**reverting that change back to a known-good commit did not restore reliable wake**, which kicked
+off a much longer investigation. Long elimination process, each step confirmed/ruled out live on
+hardware:
+
+- **Ruled out:** the Ethernet PHY shutdown attempt itself (fully reverted, confirmed via `git
+  diff` to be byte-identical to the prior working commit — board still didn't wake reliably).
+- **Ruled out:** disabling `Ethernet.begin()` in software entirely — didn't help, because the PHY
+  chip does link autonegotiation electrically once powered, independent of whether the software
+  driver ever touched it.
+- **Ruled out:** the manual CPU clock-down/PLL-bypass sequence in `enterSleep()` — reproduced the
+  identical failure with that block skipped entirely and the CPU held at full clock throughout.
+- **Real, fixed bug #1:** the GNSS EXTINT wake pulse was timed via
+  `while (ARM_DWT_CYCCNT - t < N);` — confirmed on hardware that the DWT cycle counter doesn't
+  reliably increment immediately after a STOP-mode `wfi` returns, hanging the board on every wake
+  attempt. Fixed with a plain instruction-counting loop (`for (volatile uint32_t i = 0; ...)`),
+  which has no peripheral dependency and is guaranteed to terminate.
+- **Real, fixed bug #2:** `SCB_AIRCR = 0x05FA0004;` (the software system reset) had no `dsb`
+  barrier after it. ARM's documented pattern requires one — without it, the store can sit in the
+  write buffer long enough that execution falls into the following `while(1);` before the reset
+  is actually committed, spinning forever waiting for a reset that was never issued. Added
+  `asm volatile("dsb");` immediately after the write.
+- **Real, fixed bug #3 (the actual root cause of the original regression):** `enterSleep()` never
+  masked `IRQ_ENET`. QNEthernet's driver enables this interrupt in the NVIC during normal
+  operation, and with RealDash actively connected and streaming, live Ethernet RX/link-status
+  traffic could wake the CPU from STOP mode at any time — explaining both the original regression
+  report and why reliability had been fine before RealDash was actively used for extended
+  periods. Fixed with `NVIC_DISABLE_IRQ(IRQ_ENET);` before sleep — masking just the interrupt
+  rather than powering down the PHY (which is what hung the board earlier) leaves QNEthernet's
+  internal state and the PHY's power/clocks completely untouched, so there's nothing to undo; the
+  NVIC enable bit resets to default on the `AIRCR` reset regardless.
+- **Defensive, not confirmed as root cause:** CAN2 (EVCC) and CAN3 (wireless gateway) wake
+  sources are temporarily disabled in `enterSleep()` — neither has anything connected right now,
+  and an unterminated/floating CAN bus was separately confirmed (with CAN3) to spuriously fire
+  the wake interrupt via transceiver RXD noise, no real traffic involved. Re-enable per-bus once
+  each device is back in service (see the comment in `sleep.cpp`). The LIN UART (Serial6) is now
+  also explicitly ended before sleep for the same reason (no transceiver connected, RX pin floats)
+  — its interrupt was never a **wake source** (`enterSleep()` never armed it as one), but it stays
+  live and uses the same underlying failure mode, so it's quiesced defensively.
+
+**Still open:** the original ~4 mA → ~23 mA current regression itself is *not* fixed by any of
+the above. Masking `IRQ_ENET` stops Ethernet from being able to *wake* the CPU, but the PHY and
+its clocks are still fully powered throughout sleep — nothing here reduces the current draw. A
+real fix needs a safe way to power down the Ethernet PHY specifically, which is exactly what
+hung the board when tried directly in `enterSleep()` earlier — don't re-attempt that without a
+better verification method than power-cycle-and-retest.
+
 ## VU12 backlight control from a RealDash on-screen button — confirmed working on hardware
 
 Goal: an on-screen push button/slider in RealDash controls the VU12 display's backlight, via a
@@ -233,7 +284,9 @@ All confirmed fixed on real hardware except where noted:
 
 ## Still open / not fixed
 
-- **Wake-cause detection (`SNVS_LPGPR0`/`extWakePending`) intermittently wrong.** Even with
+- **Wake-cause detection (`SNVS_LPGPR0`/`extWakePending`) intermittently wrong.** Currently moot
+  in practice — CAN2/CAN3 wake sources are disabled (see "Sleep/wake reliability" above), so this
+  path isn't exercised until they're re-enabled. Even with
   `KL15R` confirmed low via a fresh debug print, `SNVS_LPGPR0` sometimes reads back `0` (normal
   boot) instead of the CAN-wake magic value — meaning it lands in `Off` instead of `KL15C`.
   Consistently reads back as a *clean* `0`, not garbage (ruling out the old DMAMEM-style

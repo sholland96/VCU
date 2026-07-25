@@ -503,11 +503,15 @@ void initCAN (int CAN1baud, int CAN2baud, int CAN3baud) {
   can2.onReceive(FIFO, can2Sniff);
   //can2.mailboxStatus();
 
-  can3.begin();
-  can3.setBaudRate(CAN3baud);
-  can3.setMaxMB(16);
-  can3.enableFIFO();
-  can3.enableFIFOInterrupt();
-  can3.onReceive(FIFO, can3Sniff);
+  // CAN3 temporarily disabled: nothing is currently connected to it (wireless gateway
+  // unplugged, Odroid has no CAN interface), and an unterminated/floating bus was
+  // triggering spurious wake-from-sleep cycles via CAN3_RX_PIN (see sleep.cpp). One-line
+  // re-enable once the gateway is back in service.
+  // can3.begin();
+  // can3.setBaudRate(CAN3baud);
+  // can3.setMaxMB(16);
+  // can3.enableFIFO();
+  // can3.enableFIFOInterrupt();
+  // can3.onReceive(FIFO, can3Sniff);
   //can3.mailboxStatus();
 }//end of initCAN (int CAN1baud, int CAN2baud, int CAN3baud)

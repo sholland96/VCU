@@ -290,12 +290,19 @@ not real sensor data — TODO.
 | other | "Invalid request..." | — |
 
 **Wake-on-CAN3 status request/response** — the gateway can wake the VCU from sleep to ask for
-current status. CAN3's RX pin (pin 30) is armed as a third `enterSleep()` wake source (alongside
-KL15R and CAN2), the same way EVCC/CAN2 activity already wakes the VCU — the CAN controller is
+current status. CAN3's RX pin (pin 30) is designed as a third `enterSleep()` wake source
+(alongside KL15R and CAN2), the same way EVCC/CAN2 activity wakes the VCU — the CAN controller is
 clock-gated during sleep, so only a raw GPIO edge is detected; the actual request frame is not
 decoded until after the wake-and-reboot cycle completes. **The gateway retries the request every
 500 ms for up to 20 s** until it gets a response, since the frame that triggers the wake is itself
 lost.
+
+**Currently disabled:** CAN2 and CAN3 are both temporarily removed from `enterSleep()`'s
+wake-source arming, since neither has anything connected right now and an unterminated/floating
+CAN bus was confirmed on hardware to spuriously fire the wake interrupt via transceiver RXD noise
+picked up with no real traffic at all. KL15R is the sole wake source until each device is back in
+service (re-enable per-bus in `sleep.cpp` — see the comment there). Everything below describes
+the intended behaviour once re-enabled.
 
 Ideally the VCU recognises this as a CAN wake (via `SNVS_LPGPR0`, see below) and lands directly in
 `KL15C` standby, which skips GNSS bring-up entirely (`extWakePending` gates the GNSS block in
@@ -376,8 +383,8 @@ Key constants (`defines.h`):
 
 | Pin | Function |
 |-----|----------|
-| 0 | CAN2 RXD wake input (`CAN2_RX_PIN`) — MCP2562 drives this low on bus activity; falling-edge interrupt wakes VCU from STOP mode for EVCC charge sessions |
-| 30 | CAN3 RXD wake input (`CAN3_RX_PIN`) — same mechanism as pin 0, wakes VCU from STOP mode for wireless gateway status requests |
+| 0 | CAN2 RXD wake input (`CAN2_RX_PIN`) — MCP2562 drives this low on bus activity; intended to wake VCU from STOP mode for EVCC charge sessions via falling-edge interrupt, but currently **disabled** in `enterSleep()` (nothing connected right now — see "Wake-on-CAN3" above) |
+| 30 | CAN3 RXD wake input (`CAN3_RX_PIN`) — same mechanism as pin 0, intended to wake VCU for wireless gateway status requests, currently **disabled** for the same reason |
 | 2 | KL15R input (`KL15R_PIN`) — key position 1, wakes hardware and is sampled in `enterSleep()` to distinguish CAN-wake from key-on wake |
 | 3 | Loop timing debug output |
 | 4 | CAN1 RX timing debug output |
@@ -411,15 +418,21 @@ Turning the key off (KLR low) while in the Off state triggers `enterSleep()` aft
 1. All four timers stop; heartbeat LED is forced off.
 2. USB PHY is powered down (`USBPHY1_PWD = 0xFFFFFFFF`) and its CCM clock gated.
 3. GNSS is put into backup mode via `UBX-RXM-PMREQ` (`powerOffWithInterrupt`, EXTINT0 wake source, ~15 µA).
-4. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling.
-5. `CAN_STBY_PIN` (pin 32) is driven HIGH — all three CAN transceivers enter standby mode.
-6. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum; DCDC core voltage drops to 0.95 V), then AHB is switched to the 24 MHz crystal, ARM PLL bypass is enabled (CPU runs at crystal / ARM_PODF ≈ 3 MHz), and the ARM PLL VCO is powered down.
-7. CAN2 and CAN3 RXD pins (pins 0 and 30) are reconfigured as GPIO inputs with pull-up. Rising-edge interrupt on `KLR_PIN` and falling-edge interrupts on `CAN2_RX_PIN`/`CAN3_RX_PIN` are attached as three wake sources; SysTick is disabled. The MCP2562 transceivers drive RXD low on dominant bus edges even in standby, so EVCC (CAN2) or wireless gateway (CAN3) traffic wakes the VCU without KLR.
-8. `CCM_CLPCR[LPM]` is set to STOP (0b10) and `SCB_SCR[SLEEPDEEP]` is set — a single `wfi` then enters IMXRT1062 STOP mode, gating internal power domains beyond what WAIT mode achieves.
+4. Ethernet's NVIC interrupt (`IRQ_ENET`) is masked and the LIN UART (Serial6) is ended — both were confirmed capable of spuriously waking the CPU (a live Ethernet link, or a floating/unterminated LIN RX pin with no transceiver connected) since neither was previously quiesced before sleep.
+5. FlexCAN1/2/3 peripheral clocks are gated off via `CCM_CCGR0` / `CCM_CCGR7` — stops internal CAN controller sampling.
+6. `CAN_STBY_PIN` (pin 32) is driven HIGH — all three CAN transceivers enter standby mode.
+7. CPU clock is reduced to ~16.2 MHz (ARM PLL minimum; DCDC core voltage drops to 0.95 V), then AHB is switched to the 24 MHz crystal, ARM PLL bypass is enabled (CPU runs at crystal / ARM_PODF ≈ 3 MHz), and the ARM PLL VCO is powered down.
+8. A rising-edge interrupt on `KLR_PIN` is attached as the sole wake source (CAN2/CAN3 wake-arming is currently disabled — see "Wake-on-CAN3" above); SysTick is disabled.
+9. `CCM_CLPCR[LPM]` is set to STOP (0b10) and `SCB_SCR[SLEEPDEEP]` is set — a single `wfi` then enters IMXRT1062 STOP mode, gating internal power domains beyond what WAIT mode achieves.
 
-On wake, a rising edge is asserted on pin 33 (EXTINT0) via DWT cycle-counter delay to start the GNSS hot-start before the Teensy resets; `SCB_AIRCR` resets the chip so `setup()` re-initialises all peripherals (including clock restoration) cleanly.
+On wake, a rising edge is asserted on pin 33 (EXTINT0) via a bounded instruction-counting delay
+loop to start the GNSS hot-start before the Teensy resets (an earlier version used the DWT cycle
+counter for this delay, but that was found to not reliably increment immediately after a
+STOP-mode `wfi` returns, hanging the board — see `sleep.cpp`). `SCB_AIRCR` (followed by a `dsb`
+barrier, required for the reset to reliably commit) resets the chip so `setup()` re-initialises
+all peripherals (including clock restoration) cleanly.
 
-**Measured sleep current: ~4 mA at 12 V** (external 90–95 % efficient 12 V → 5 V switcher + Teensy onboard 3.3 V LDO). Down from ~61 mA before sleep optimisations — a 93 % reduction.
+**Measured sleep current: ~4 mA at 12 V** (external 90–95 % efficient 12 V → 5 V switcher + Teensy onboard 3.3 V LDO) before the RealDash-over-Ethernet feed was added. **Regressed to ~23-31 mA** once Ethernet was added — not yet fixed. Masking `IRQ_ENET` (see above) restored reliable *wake*, but the Ethernet PHY and its clocks stay fully powered throughout sleep; an actual fix needs a safe way to power the PHY down specifically, which hung the board when attempted directly and hasn't been revisited since.
 
 ### On State (KL15 active)
 
