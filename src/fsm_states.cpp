@@ -55,7 +55,7 @@ void Idle_enter()
     msg2.buf[0] = 0x04;
     msg2.buf[1] = 0x1B;
     msg2.buf[2] = KEYPAD_CMD_SET_LED;
-    msg2.buf[3] = 0x05;//button 5
+    msg2.buf[3] = KEYPAD_KEY_START_STOP;
     msg2.buf[4] = KEYPAD_COLOR_AMBER;
     msg2.buf[5] = KEYPAD_MODE_BLINK;
     msg2.buf[6] = 0x00;
@@ -193,13 +193,14 @@ void check_PreCharge() {
 }
 
 void check_Idle() {
-  if (button_0x01_state && LDUrpm == 0) { // Park + stopped → exit On State
-    button_0x01_state = 0;
+  if ((buttonPark || stopRequested) && LDUrpm == 0) { // Park or Start/Stop + stopped → exit On State
+    buttonPark = 0;
+    stopRequested = false;
     KL15state = false;
     fsm.trigger(KL15_OFF);
     return;
   }
-  if (button_0x08_state) { // Drive button → enter Drive state
+  if (buttonDrive) { // Drive button → enter Drive state
     fsm.trigger(DRIVE_ON);
     return;
   }
@@ -212,8 +213,9 @@ void Drive_exit() {
 }
 
 void check_DriveState() {
-  if (button_0x01_state && LDUrpm == 0) { // Park button + stopped → Idle
-    button_0x01_state = 0;
+  if ((buttonPark || stopRequested) && LDUrpm == 0) { // Park or Start/Stop + stopped → Idle
+    buttonPark = 0;
+    stopRequested = false;
     fsm.trigger(DRIVE_OFF);
     return;
   }
@@ -236,8 +238,9 @@ void Charge_exit() {
 }
 
 void check_Charge() {
-  if (button_0x01_state && LDUrpm == 0) { // Park + stopped → emergency exit
-    button_0x01_state = 0;
+  if ((buttonPark || stopRequested) && LDUrpm == 0) { // Park or Start/Stop + stopped → emergency exit
+    buttonPark = 0;
+    stopRequested = false;
     KL15state = false;
     fsm.trigger(KL15_OFF);
     return;
@@ -260,7 +263,7 @@ void Fault_enter() {
   msg2.buf[0] = 0x04;
   msg2.buf[1] = 0x1B;
   msg2.buf[2] = KEYPAD_CMD_SET_LED;
-  msg2.buf[3] = 0x05;
+  msg2.buf[3] = KEYPAD_KEY_START_STOP;
   msg2.buf[4] = KEYPAD_COLOR_RED;
   msg2.buf[5] = KEYPAD_MODE_BLINK;
   msg2.buf[6] = 0x00;
@@ -277,8 +280,9 @@ void Fault_exit() {
 }
 
 void check_Fault() {
-  if (button_0x01_state && LDUrpm == 0) {
-    button_0x01_state = 0;
+  if ((buttonPark || stopRequested) && LDUrpm == 0) {
+    buttonPark = 0;
+    stopRequested = false;
     KL15state = false;
     fsm.trigger(FAULT_CLEAR);
   }
@@ -297,7 +301,7 @@ void HeatPack_exit() {
 }
 
 void check_HeatPack() {
-  if (button_0x01_state && LDUrpm == 0) { button_0x01_state = 0; KL15state = false; fsm.trigger(KL15_OFF); return; }
+  if ((buttonPark || stopRequested) && LDUrpm == 0) { buttonPark = 0; stopRequested = false; KL15state = false; fsm.trigger(KL15_OFF); return; }
   // TODO: monitor pMBB32 temps; fsm.trigger(TEMP_OK) when in range
 }
 
@@ -314,7 +318,7 @@ void CoolPack_exit() {
 }
 
 void check_CoolPack() {
-  if (button_0x01_state && LDUrpm == 0) { button_0x01_state = 0; KL15state = false; fsm.trigger(KL15_OFF); return; }
+  if ((buttonPark || stopRequested) && LDUrpm == 0) { buttonPark = 0; stopRequested = false; KL15state = false; fsm.trigger(KL15_OFF); return; }
   // TODO: monitor pMBB32 temps; fsm.trigger(TEMP_OK) when in range
 }
 
@@ -355,7 +359,7 @@ void check_KL15C() {
     msg2.buf[0]         = 0x04;
     msg2.buf[1]         = 0x1B;
     msg2.buf[2]         = KEYPAD_CMD_SET_LED;
-    msg2.buf[3]         = 0x01; // button 1 — Park/P
+    msg2.buf[3]         = KEYPAD_KEY_PARK;
     msg2.buf[4]         = kl15rNow ? KEYPAD_COLOR_AMBER : KEYPAD_COLOR_OFF;
     msg2.buf[5]         = kl15rNow ? KEYPAD_MODE_BLINK  : KEYPAD_MODE_SOLID;
     msg2.buf[6]         = 0x00;
@@ -394,7 +398,7 @@ void KL15C_exit() {
   msg2.buf[0]         = 0x04;
   msg2.buf[1]         = 0x1B;
   msg2.buf[2]         = KEYPAD_CMD_SET_LED;
-  msg2.buf[3]         = 0x01; // button 1 — Park/P
+  msg2.buf[3]         = KEYPAD_KEY_PARK;
   msg2.buf[4]         = KEYPAD_COLOR_OFF;
   msg2.buf[5]         = KEYPAD_MODE_SOLID;
   msg2.buf[6]         = 0x00;
@@ -421,7 +425,7 @@ void check_KL17()
 }
 void check_Drive()
 {
-  if(button_0x08_state) {
+  if(buttonDrive) {
     fsm.trigger(DRIVE_ON);
   } else {
     //fsm.trigger(DRIVE_OFF);

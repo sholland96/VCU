@@ -128,17 +128,16 @@ uint16_t groundSpeed = 0;
 uint32_t GPSaltitude = 0;
 uint8_t fixType;
 bool KL17state;
-bool KL15state = false;  // true when keypad button 5 (KL15/Ignition) is active
+bool KL15state = false;  // true when keypad key 1 (Start/Stop) has been pressed to start
 
 uint16_t debounceDelay = 250;//debounce time (ms)
-uint8_t button_0x01_state;
-uint8_t button_0x02_state;
-uint8_t button_0x04_state;
-uint8_t button_0x08_state;
-uint8_t button_0x10_state;
-uint8_t button_0x20_state;
-uint8_t button_0x40_state;
-uint8_t button_0x80_state;
+uint8_t buttonStartStop;
+uint8_t buttonPark;
+uint8_t buttonReverse;
+uint8_t buttonNeutral;
+uint8_t buttonDrive;
+uint8_t buttonSpeedMode;
+bool    stopRequested = false;
 uint8_t new_0x01_state;
 uint8_t new_0x02_state;
 uint8_t new_0x04_state;

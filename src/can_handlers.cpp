@@ -221,46 +221,47 @@ void can2Sniff(const CAN_message_t &msg) {
     case 0x628:
       IVTenergyCounter = (msg.buf[2]<<24) | (msg.buf[3]<<16) | (msg.buf[4]<<8) | msg.buf[5];
       break;
-    case 0x18EFFF21://CAN keypad
+    case 0x18EFFF21://CAN keypad (PKP1600SI, 6 buttons — see dbc/PKP1600SI_J1939.dbc)
       if(msg.buf[2] == 0x01){ // Key Contact state (event-driven, enabled by default)
         bool pressed = (msg.buf[4] == 0x01);
-        switch (msg.buf[3]) { // key number 1-8
-          case 1://Park
-            button_0x01_state = pressed ? HIGH : LOW;
-            if (pressed) { LDUdirection = LDU_DIR_STOP; Serial.println("BTN: Park"); }
-            break;
-          case 2://Reverse
-            button_0x02_state = pressed ? HIGH : LOW;
-            if (pressed) { LDUdirection = LDU_DIR_REVERSE; Serial.println("BTN: Reverse"); }
-            break;
-          case 3://Neutral
-            button_0x04_state = pressed ? HIGH : LOW;
-            if (pressed) { LDUdirection = LDU_DIR_NEUTRAL; Serial.println("BTN: Neutral"); }
-            break;
-          case 4://Drive
-            button_0x08_state = pressed ? HIGH : LOW;
-            if (pressed) { LDUdirection = LDU_DIR_FORWARD; Serial.println("BTN: Drive"); }
-            break;
-          case 5: // KL15 — one-shot start, Park exits
-            if (pressed && !button_0x10_state && !KL15state) {
-              button_0x10_state = HIGH;
-              KL15state = true;
-              Serial.println("KL15: ON");
-            } else if (!pressed) {
-              button_0x10_state = LOW;
+        switch (msg.buf[3]) { // key number 1-6
+          case KEYPAD_KEY_START_STOP: {
+            // Rising edge only: first press while off starts (KL15state=true); a later
+            // press while already on requests a stop, deferred until LDUrpm==0 lets the
+            // relevant check_*() actually trigger KL15_OFF (same stopped-vehicle gate
+            // already used for the Park button below).
+            bool wasLow = !buttonStartStop;
+            buttonStartStop = pressed ? HIGH : LOW;
+            if (pressed && wasLow) {
+              if (!KL15state) {
+                KL15state = true;
+                Serial.println("BTN: Start/Stop — start");
+              } else {
+                stopRequested = true;
+                Serial.println("BTN: Start/Stop — stop requested");
+              }
             }
             break;
-          case 6://Speed Mode
-            button_0x20_state = pressed ? HIGH : LOW;
+          }
+          case KEYPAD_KEY_PARK:
+            buttonPark = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_STOP; Serial.println("BTN: Park"); }
+            break;
+          case KEYPAD_KEY_REVERSE:
+            buttonReverse = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_REVERSE; Serial.println("BTN: Reverse"); }
+            break;
+          case KEYPAD_KEY_NEUTRAL:
+            buttonNeutral = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_NEUTRAL; Serial.println("BTN: Neutral"); }
+            break;
+          case KEYPAD_KEY_DRIVE:
+            buttonDrive = pressed ? HIGH : LOW;
+            if (pressed) { LDUdirection = LDU_DIR_FORWARD; Serial.println("BTN: Drive"); }
+            break;
+          case KEYPAD_KEY_SPEED_MODE:
+            buttonSpeedMode = pressed ? HIGH : LOW;
             if (pressed) Serial.println("BTN: Speed Mode");
-            break;
-          case 7://AUX
-            button_0x40_state = pressed ? HIGH : LOW;
-            if (pressed) Serial.println("BTN: AUX");
-            break;
-          case 8://Drive Mode
-            button_0x80_state = pressed ? HIGH : LOW;
-            if (pressed) Serial.println("BTN: Drive Mode");
             break;
           default:
             Serial.printf("BTN: unknown key %u\n", msg.buf[3]);

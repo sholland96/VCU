@@ -404,7 +404,7 @@ The VCU uses two top-level regions separated by the physical key switch:
 
 ### KLR region (key position 1)
 
-Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the KL15 start button (keypad button 5).
+Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the Start/Stop button (keypad key 1).
 
 Turning the key off (KLR low) while in the Off state triggers `enterSleep()` after a 500 ms debounce (KLR must be continuously low for 500 ms). The debounce gives the EVCC time to send `New_Charge_Session` (0x68001) after a CAN2 wake before sleep is re-entered. `enterSleep()` returns immediately if `EVCCsessionActive` is true (active charge session), keeping the VCU awake without KLR.
 
@@ -423,24 +423,24 @@ On wake, a rising edge is asserted on pin 33 (EXTINT0) via DWT cycle-counter del
 
 ### On State (KL15 active)
 
-Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable sequence. The entire On State is exited by pressing the **Park** button while the vehicle is stationary (`LDUrpm == 0`), which fires `KL15_OFF` and disables the contactors.
+Pressing keypad key 1 (Start/Stop) fires `KL15_ON` and initiates the drive-enable sequence. The entire On State is exited by pressing Park (key 2) or Start/Stop again while the vehicle is stationary (`LDUrpm == 0`), which fires `KL15_OFF` and disables the contactors.
 
 ```
-  [KLR / Off] ──── KL15_ON (btn 5) ────> [PreCharge]
+  [KLR / Off] ──── KL15_ON (key 1) ────> [PreCharge]
        ^ ^                                    │ IVT U2 ≥ 95% U1 within 2 s
        │ │ KL15_OFF                           ├──────────────────────> [Idle]
-       │ │ (Park btn, speed = 0)              │ EVCC chargeMode = true
+       │ │ (key 2 or 1, speed = 0)            │ EVCC chargeMode = true
        │ │ or FAULT_CLEAR                     ├──────────────────────> [Charge]
-       │ │ (Park btn, speed = 0)              │ timeout or FAULT_EV
+       │ │ (key 2 or 1, speed = 0)            │ timeout or FAULT_EV
        │ │                                    └──────────────────────> [Fault]
        │ │
-       │ │        DRIVE_ON (btn 8)      DRIVE_OFF (btn 1, speed = 0)
+       │ │        DRIVE_ON (key 5)     DRIVE_OFF (key 2 or 1, speed = 0)
        │ │        [Idle] ──────────────> [Drive] ──────────────────> [Idle]
        │ │
        │ │        TEMP_LOW / TEMP_HIGH                    TEMP_OK
        │ │        [Idle/Drive/Charge] ──────> [HeatPack / CoolPack] ──> [Idle]
        │ │
-       │ └── KL15_OFF (Park btn, speed = 0) from any On state ──> [Off]
+       │ └── KL15_OFF (key 2 or 1, speed = 0) from any On state ──> [Off]
        │
        │  EXT_WAKE (CAN2 wake, KL15R low)
        └──────────────────────────────────── [KL15C] ─── KL15_ON ──> [Off]
@@ -452,15 +452,15 @@ Pressing keypad button 5 (KL15) fires `KL15_ON` and initiates the drive-enable s
 
 | State | Entry action | Exit condition |
 |-------|-------------|----------------|
-| Off | All contactors off; awaiting KL15 | Button 5 pressed → `KL15_ON` |
+| Off | All contactors off; awaiting Start/Stop | Key 1 pressed → `KL15_ON` |
 | PreCharge | Negative contactor on; pre-charge relay on; IVT U2 monitored | U2 ≥ 95% U1 → `PRECHARGE_OK`; timeout → `PRECHARGE_FAIL` |
-| Idle | Positive contactor on; keypad amber blink; "KL15 on" SMS | Button 8 (Drive) → `DRIVE_ON`; Button 1 (Park) + speed=0 → `KL15_OFF` |
-| Drive | LDU enabled; direction from keypad N/R/D | Button 1 (Park) + speed=0 → `DRIVE_OFF` (→ Idle) |
-| Charge | EVCC-initiated; contactors remain closed | EVCC stop request → `CHARGE_OFF`; Button 1 + speed=0 → `KL15_OFF` |
-| HeatPack | Pump on; heater on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
-| CoolPack | Pump on; AC exchanger on *(TODO)* | BMS temp in range → `TEMP_OK`; Button 1 + speed=0 → `KL15_OFF` |
-| Fault | All contactors off; keypad red blink; fault SMS | Button 1 (Park) + speed=0 → `FAULT_CLEAR` (→ Off) |
-| KL15C | Minimal CAN-wake standby (no HV); EVCC heartbeat monitored; KL15R LED edge-detected | KL15 pressed → `KL15_ON` (→ Off); AC plug-in → `AC_CHARGE_START` (→ PreCharge); 60 s inactivity → `enterSleep()` |
+| Idle | Positive contactor on; keypad amber blink; "KL15 on" SMS | Key 5 (Drive) → `DRIVE_ON`; Key 2 (Park) or 1 (Start/Stop) + speed=0 → `KL15_OFF` |
+| Drive | LDU enabled; direction from keypad N/R/D | Key 2 (Park) or 1 (Start/Stop) + speed=0 → `DRIVE_OFF` (→ Idle) |
+| Charge | EVCC-initiated; contactors remain closed | EVCC stop request → `CHARGE_OFF`; Key 2 or 1 + speed=0 → `KL15_OFF` |
+| HeatPack | Pump on; heater on *(TODO)* | BMS temp in range → `TEMP_OK`; Key 2 or 1 + speed=0 → `KL15_OFF` |
+| CoolPack | Pump on; AC exchanger on *(TODO)* | BMS temp in range → `TEMP_OK`; Key 2 or 1 + speed=0 → `KL15_OFF` |
+| Fault | All contactors off; keypad red blink; fault SMS | Key 2 (Park) or 1 (Start/Stop) + speed=0 → `FAULT_CLEAR` (→ Off) |
+| KL15C | Minimal CAN-wake standby (no HV); EVCC heartbeat monitored; KL15R LED edge-detected | Start/Stop pressed → `KL15_ON` (→ Off); AC plug-in → `AC_CHARGE_START` (→ PreCharge); 60 s inactivity → `enterSleep()` |
 
 `reducedPowerActive` flag (set by BMS temp fault during Drive/Charge) clamps throttle to `THROTTLE_FAULT_LIMIT` without leaving Drive state.
 
@@ -493,29 +493,34 @@ If `extWakePending` is set, `fsm.trigger(EXT_WAKE)` fires before the main loop, 
 
 ## CAN Keypad Button Assignment
 
+Blink Marine PKP1600SI, 6 buttons — replaced the earlier 8-button PKP2400SI-family pad (same
+vendor, same proprietary command protocol; see `dbc/PKP1600SI_J1939.dbc`, generated and
+validated against the manual `PKP_1600_SI_J1939_UM.pdf`).
+
 Keypad: RX `0x18EFFF21`, TX `0x18EF2100` (CAN2 @ 500 kbps)
 
-Key Contact state message format (PKP2400SI J1939 §6, event-driven by default):
+Key Contact state message format (PKP1600SI J1939 §6, event-driven by default):
 
 | Byte | Value | Meaning |
 |------|-------|---------|
 | 0 | `0x04` | Header |
 | 1 | `0x1B` | Header |
 | 2 | `0x01` | Key Contact state command |
-| 3 | `1`–`8` | Key number |
+| 3 | `1`–`6` | Key number |
 | 4 | `0x00` / `0x01` | Released / Pressed |
 | 5 | `0x21` | Keypad identifier |
 
-| Button | Label | Function |
-|--------|-------|----------|
-| 1 | Park | In Drive: return to Idle (speed = 0 required). In Idle/Charge/HeatPack/CoolPack/Fault: exit On State (speed = 0 required). |
-| 2 | Reverse | Set LDU direction to reverse |
-| 3 | Neutral | Set LDU direction to neutral |
-| 4 | Drive | In Idle: enter Drive state; set LDU direction to forward |
-| 5 | KL15 / Start | Enter On State (fires `KL15_ON`); one-shot — Park exits |
+| Key | Label | Function |
+|-----|-------|----------|
+| 1 | Start/Stop | Rising edge only. Pressed while off → start (fires `KL15_ON`). Pressed again while already on → sets `stopRequested`, consumed the same way as Park below (speed = 0 required) — functionally identical to the old KL15/Ignition button, plus a genuine toggle-off. |
+| 2 | Park | In Drive: return to Idle (speed = 0 required). In Idle/Charge/HeatPack/CoolPack/Fault: exit On State (speed = 0 required). |
+| 3 | Reverse | Set LDU direction to reverse |
+| 4 | Neutral | Set LDU direction to neutral |
+| 5 | Drive | In Idle: enter Drive state; set LDU direction to forward |
 | 6 | Speed Mode | *(undefined — reserved)* |
-| 7 | Auxiliary | *(undefined — reserved)* |
-| 8 | Drive Mode | *(undefined — reserved)* |
+
+Dropped from the 8-button pad, no longer wired to anything: **Auxiliary** and **Drive Mode**
+(both were already `*(undefined — reserved)*` — no functional loss).
 
 ---
 

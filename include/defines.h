@@ -133,6 +133,15 @@ extern TeensyTimerTool::PeriodicTimer t1, t2, t3;
 #define KEYPAD_CMD_SOURCE_ADDR            0x70  // change device source address
 #define KEYPAD_CMD_FACTORY_RESET          0x34  // factory reset (byte 3: 0x01 to confirm)
 
+// PKP1600SI 6-button keypad key numbers (replaces the earlier 8-button pad — see
+// dbc/PKP1600SI_J1939.dbc). Key Contact state messages (command 01h) use these in byte 3.
+#define KEYPAD_KEY_START_STOP  1
+#define KEYPAD_KEY_PARK        2
+#define KEYPAD_KEY_REVERSE     3
+#define KEYPAD_KEY_NEUTRAL     4
+#define KEYPAD_KEY_DRIVE       5
+#define KEYPAD_KEY_SPEED_MODE  6
+
 // Batch LED mode selections (byte 3 for KEYPAD_CMD_BATCH_MODE)
 #define KEYPAD_BATCH_SINGLE           0x00  // standard single-LED mode (default)
 #define KEYPAD_BATCH_ENABLE           0x01  // batch LED mode
@@ -449,17 +458,17 @@ extern uint16_t groundSpeed;
 extern uint32_t GPSaltitude;
 extern uint8_t fixType;
 extern bool KL17state;
-extern bool KL15state;  // true when keypad button 5 (KL15/Ignition) is active
+extern bool KL15state;  // true when keypad key 1 (Start/Stop) has been pressed to start
 
 extern uint16_t debounceDelay;//debounce time (ms)
-extern uint8_t button_0x01_state;
-extern uint8_t button_0x02_state;
-extern uint8_t button_0x04_state;
-extern uint8_t button_0x08_state;
-extern uint8_t button_0x10_state;
-extern uint8_t button_0x20_state;
-extern uint8_t button_0x40_state;
-extern uint8_t button_0x80_state;
+extern uint8_t buttonStartStop; // keypad key 1 — raw press state
+extern uint8_t buttonPark;      // keypad key 2 — raw press state
+extern uint8_t buttonReverse;   // keypad key 3 — raw press state
+extern uint8_t buttonNeutral;   // keypad key 4 — raw press state
+extern uint8_t buttonDrive;     // keypad key 5 — raw press state
+extern uint8_t buttonSpeedMode; // keypad key 6 — raw press state
+extern bool    stopRequested;   // set on a Start/Stop press while KL15state is already true;
+                                 // consumed (and cleared) once LDUrpm==0 allows KL15_OFF
 extern uint8_t new_0x01_state;
 extern uint8_t new_0x02_state;
 extern uint8_t new_0x04_state;

@@ -4,6 +4,37 @@ Snapshot of where this VCU firmware stands, for picking up development on anothe
 See `README.md` for the full hardware/protocol reference — this file is about *process*: what
 just happened, what's confirmed working, and what's still open.
 
+## PKP1600SI 6-button keypad — confirmed working on hardware
+
+Replaced the earlier 8-button pad with a Blink Marine PKP1600SI (6 buttons), same vendor/
+protocol — see `dbc/PKP1600SI_J1939.dbc` and README's "CAN Keypad Button Assignment" section for
+the full mapping. New layout: 1=Start/Stop, 2=Park, 3=Reverse, 4=Neutral, 5=Drive, 6=Speed Mode
+(Auxiliary/Drive Mode dropped — both were already unused/reserved on the old pad). Start/Stop
+merges the old KL15/Ignition button's start behavior with a genuine toggle-off: a second press
+while already running sets `stopRequested`, consumed the same way as Park everywhere the FSM
+already gates exit on `LDUrpm == 0`. All 6 keys confirmed correct on hardware, including the
+FSM transitions they trigger (Off→PreCharge→Idle, Idle→Drive, Drive→Idle, Idle→Off).
+
+**Bug found and fixed during bring-up: reconfiguring the keypad's CAN baud rate live crashed the
+Teensy, twice.** A brand-new PKP1600SI ships at 250 kbit/s by default; this project's CAN2 runs
+at 500 kbit/s, so the new keypad couldn't be heard at all until reconfigured (command 6Fh). The
+first attempt called `can2.setBaudRate()` from `loop()` and reset the board. Pausing `t0`/`t1`/
+`t2` (all three write to CAN2 from ISR context) before the second attempt *also* reset it —
+ruling out the ISR-race theory as the sole cause. Root cause not fully understood, but avoided
+entirely by moving the one-time reconfigure into `setup()`, in the window after `initCAN()` but
+*before* any periodic timer starts — no concurrent access to the peripheral at all at that point.
+That worked cleanly. **If a live CAN baud-rate change is ever needed again on this board, don't
+call `FlexCAN_T4::setBaudRate()` from `loop()`/ISR context — do it in `setup()` before the
+timers start, or in a fully separate standalone sketch** (the user's own suggested fallback,
+not needed once the `setup()`-timing approach worked). The reconfigure code itself was temporary
+and has been fully removed — the keypad stores the new baud rate in its own non-volatile memory,
+so it only ever needed to run once.
+
+**Also surfaced, not fixed, pre-existing (not from this session's keypad work):** `Off_enter()`
+doesn't explicitly command the contactors open — only `Fault_enter()`/`Charge_exit()` do. An
+Idle→Off transition (via Park or Start/Stop) may leave the contactor PWM state as whatever it
+last was rather than actively opening it.
+
 ## RealDash-over-Ethernet feed — confirmed working on hardware
 
 Drafted overnight (autonomous, with the user's explicit go-ahead), then flashed and verified
