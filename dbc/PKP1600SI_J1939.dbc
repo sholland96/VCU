@@ -1,0 +1,184 @@
+VERSION ""
+
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: VCU Keypad
+
+VAL_TABLE_ EnableDisable 1 "Enabled" 0 "Disabled" ;
+VAL_TABLE_ LEDColor 9 "Yellow/green" 8 "Amber/orange" 7 "White/light blue" 6 "Magenta" 5 "Cyan" 4 "Yellow" 3 "Blue" 2 "Green" 1 "Red" 0 "Off" ;
+VAL_TABLE_ LEDState 3 "Alternate blink" 2 "Blink" 1 "On" 0 "Off" ;
+VAL_TABLE_ ContactState 1 "Pressed" 0 "Released" ;
+VAL_TABLE_ BaudRateSel 3 "250 kbit/s" 2 "500 kbit/s" ;
+VAL_TABLE_ StartupLEDShow 2 "Fast flash" 1 "Complete LED show" 0 "Off" ;
+VAL_TABLE_ LEDMgmtMode 2 "Single/multiple LED state enabled" 0 "Single LED state enabled" ;
+
+// =============================================================================
+// Blink Marine PKP1600SI J1939 keypad (6-button) — replacing the existing
+// 8-button keypad already used elsewhere in this project (same vendor, same
+// proprietary command protocol over PGN 61184/EF00h — see defines.h's
+// KEYPAD_CMD_* macros, which match this manual's command bytes: SET_LED=01h,
+// BATCH_MODE=37h, EVENT_TX=72h, PERIODIC_TX=71h, TX_SPEED=77h, BAUD_RATE=6Fh,
+// SOURCE_ADDR=70h, BACKLIGHT_BRIGHTNESS=7Bh, STATUS_LED_BRIGHTNESS=7Ch,
+// BACKLIGHT_COLOR=7Dh). Source: PKP1600SI_J1939UM_REV1.0 (Blink Marine),
+// generated from the PDF in this repo, not independently verified on hardware.
+//
+// General frame format for the two addressable messages below: byte0=04h,
+// byte1=1Bh (fixed header), byte2=command (multiplexor), byte3-7=command data,
+// unused bytes/bits set to 0xFF. Default keypad address 21h, assumed VCU
+// source address 00h — both configurable via command 70h/6Eh.
+//
+// NOT MODELED (protocol format doesn't fit the general 04h/1Bh frame, or is a
+// one-off/non-J1939 message):
+//   - LED Acknowledgment response (command 73h enables it): reuses CAN ID
+//     18EFFF21h but with a DIFFERENT frame layout (byte0=00h, not 04h) —
+//     byte1=LED state, byte2=LED number, byte3=primary color, byte4=secondary
+//     color, bytes5-7=FFh. Disabled by default.
+//   - Address Claim (60928/EE00h, ID 18EEFF21h): standard J1939 NAME field,
+//     disabled by default (command 74h) — not this project's proprietary
+//     format, not modeled here.
+//   - CANopen protocol switch: uses an 11-bit standard CAN ID
+//     (600h + current CAN ID, default 615h), not J1939/extended — one-off
+//     provisioning message, not modeled.
+// =============================================================================
+
+BO_ 2565808384 PKP_ToKeypad: 8 VCU
+ SG_ Header0 : 7|8@0+ (1,0) [0|0] "" Keypad
+ SG_ Header1 : 15|8@0+ (1,0) [0|0] "" Keypad
+ SG_ Command M : 23|8@0+ (1,0) [0|0] "" Keypad
+ SG_ SetSingleLED_KeyNumber m1 : 31|8@0+ (1,0) [1|6] "" Keypad
+ SG_ SetSingleLED_Color m1 : 39|8@0+ (1,0) [0|9] "" Keypad
+ SG_ SetSingleLED_State m1 : 47|8@0+ (1,0) [0|3] "" Keypad
+ SG_ SetSingleLED_SecondaryColor m1 : 55|8@0+ (1,0) [0|9] "" Keypad
+ SG_ SetLEDBrightness_Value m2 : 31|8@0+ (1,0) [0|63] "" Keypad
+ SG_ SetBacklightLevel_Value m3 : 31|8@0+ (1,0) [0|63] "" Keypad
+ SG_ StartupKeysMsg_Enable m40 : 31|8@0+ (1,0) [0|1] "" Keypad
+ SG_ GetSWRevision_Request m42 : 31|8@0+ (1,0) [0|0] "" Keypad
+ SG_ StartupLEDShow_Mode m52 : 31|8@0+ (1,0) [0|2] "" Keypad
+ SG_ LEDManagementMode_Mode m55 : 31|8@0+ (1,0) [0|2] "" Keypad
+ SG_ SetDestAddr_Address m110 : 31|8@0+ (1,0) [0|255] "" Keypad
+ SG_ BaudRate_Select m111 : 31|8@0+ (1,0) [2|3] "" Keypad
+ SG_ SetSourceAddr_SourceAddress m112 : 31|8@0+ (1,0) [1|253] "" Keypad
+ SG_ SetSourceAddr_KeypadIdentifier m112 : 39|8@0+ (1,0) [0|253] "" Keypad
+ SG_ PeriodicKeyState_Enable m113 : 31|8@0+ (1,0) [0|1] "" Keypad
+ SG_ EventStateTx_Enable m114 : 31|8@0+ (1,0) [0|1] "" Keypad
+ SG_ LEDAck_Enable m115 : 31|8@0+ (1,0) [0|1] "" Keypad
+ SG_ AddressClaimAtBoot_Enable m116 : 31|8@0+ (1,0) [0|1] "" Keypad
+ SG_ Heartbeat_Enable m117 : 31|8@0+ (1,0) [0|1] "" Keypad
+ SG_ Heartbeat_PeriodX10ms m117 : 39|8@0+ (10,0) [50|2540] "ms" Keypad
+ SG_ KeyStatePeriod_PeriodX10ms m119 : 31|8@0+ (10,0) [50|2540] "ms" Keypad
+ SG_ DemoMode_Enable m122 : 31|8@0+ (1,0) [0|1] "" Keypad
+ SG_ DefaultBacklightBrightness_Value m123 : 31|8@0+ (1,0) [0|63] "" Keypad
+ SG_ DefaultLEDBrightness_Value m124 : 31|8@0+ (1,0) [0|63] "" Keypad
+ SG_ DefaultBacklightColor_Color m125 : 31|8@0+ (1,0) [1|9] "" Keypad
+
+BO_ 2565865249 PKP_FromKeypad: 8 Keypad
+ SG_ Header0 : 7|8@0+ (1,0) [0|0] "" VCU
+ SG_ Header1 : 15|8@0+ (1,0) [0|0] "" VCU
+ SG_ Command M : 23|8@0+ (1,0) [0|0] "" VCU
+ SG_ KeyContactState_KeyNumber m1 : 31|8@0+ (1,0) [1|6] "" VCU
+ SG_ KeyContactState_ContactState m1 : 39|8@0+ (1,0) [0|1] "" VCU
+ SG_ KeyContactState_KeypadIdentifier m1 : 47|8@0+ (1,0) [0|255] "" VCU
+ SG_ GetSWRevision_Char0 m42 : 31|8@0+ (1,0) [0|255] "" VCU
+ SG_ GetSWRevision_Char1 m42 : 39|8@0+ (1,0) [0|255] "" VCU
+ SG_ GetSWRevision_Char2 m42 : 47|8@0+ (1,0) [0|255] "" VCU
+ SG_ GetSWRevision_Char3 m42 : 55|8@0+ (1,0) [0|255] "" VCU
+ SG_ Heartbeat_MsgCounter m249 : 31|8@0+ (1,0) [0|255] "" VCU
+ SG_ Heartbeat_Key1State m249 : 32|1@1+ (1,0) [0|1] "" VCU
+ SG_ Heartbeat_Key2State m249 : 33|1@1+ (1,0) [0|1] "" VCU
+ SG_ Heartbeat_Key3State m249 : 34|1@1+ (1,0) [0|1] "" VCU
+ SG_ Heartbeat_Key4State m249 : 35|1@1+ (1,0) [0|1] "" VCU
+ SG_ Heartbeat_Key5State m249 : 36|1@1+ (1,0) [0|1] "" VCU
+ SG_ Heartbeat_Key6State m249 : 37|1@1+ (1,0) [0|1] "" VCU
+ SG_ Heartbeat_KeypadIdentifier m249 : 63|8@0+ (1,0) [0|255] "" VCU
+
+// -----------------------------------------------------------------------------
+// Set multiple LED state — two parallel frames (see manual TABLE 3, page 8):
+// sending only the "color 1" frame turns the LED on solid; sending both with
+// different colors makes it alternate-blink between them; sending "color 1"
+// with the matching nibble = Fh in "color 2" makes it blink on/off.
+// Nibble-per-LED packing: byte0 low nibble=LED1, high nibble=LED2; byte1 low
+// nibble=LED3, high nibble=LED4; byte2 low nibble=LED5, high nibble=LED6.
+// Only requires command 37h = 02h (single/multiple LED state enabled) first.
+// -----------------------------------------------------------------------------
+BO_ 2561089792 PKP_MultiLED_Color1: 8 VCU
+ SG_ LED1_Color : 3|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED2_Color : 7|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED3_Color : 11|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED4_Color : 15|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED5_Color : 19|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED6_Color : 23|4@0+ (1,0) [0|14] "" Keypad
+
+BO_ 2561024256 PKP_MultiLED_Color2: 8 VCU
+ SG_ LED1_Color : 3|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED2_Color : 7|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED3_Color : 11|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED4_Color : 15|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED5_Color : 19|4@0+ (1,0) [0|14] "" Keypad
+ SG_ LED6_Color : 23|4@0+ (1,0) [0|14] "" Keypad
+
+CM_ BO_ 2565808384 "Sent VCU -> Keypad (default dest 21h). PGN 61184 (EF00h) PROPRIETARY A.";
+CM_ BO_ 2565865249 "Sent Keypad -> broadcast (dest FFh, source = keypad addr 21h). PGN 61184 (EF00h). Command byte also multiplexes the response to a GetSWRevision request (42/2Ah) and the periodic/event Heartbeat message (249/F9h) onto this same ID. NOT modeled here: when Byte0=00h instead of 04h, this ID instead carries the LED Acknowledgment message (byte1=LED state, byte2=LED number, byte3=primary color, byte4=secondary color) - a structurally different frame the vendor overloaded onto the same CAN ID. Disabled by default (command 73h).";
+CM_ BO_ 2561089792 "PGN A700h AUXILIARY I/O #2 - 'color 1' frame for Set multiple LED state.";
+CM_ BO_ 2561024256 "PGN A600h AUXILIARY I/O #3 - 'color 2' frame for Set multiple LED state.";
+CM_ SG_ 2565808384 Command "23h/'Command' value: 128 (80h) = change protocol to CANopen, no data bytes used.";
+CM_ SG_ 2565865249 GetSWRevision_Char0 "4-byte ASCII string (e.g. 'V2.10'), one signal per byte - not a native DBC string type.";
+CM_ SG_ 2565865249 Heartbeat_KeypadIdentifier "Byte 7, not byte 5 - byte 5 is reserved (00h), byte 6 unused (FFh).";
+
+VAL_ 2565808384 SetSingleLED_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" ;
+VAL_ 2565808384 SetSingleLED_State 0 "Off" 1 "On" 2 "Blink" 3 "Alternate blink" ;
+VAL_ 2565808384 SetSingleLED_SecondaryColor 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" ;
+VAL_ 2565808384 StartupKeysMsg_Enable 0 "Disabled (default)" 1 "Enabled" ;
+VAL_ 2565808384 StartupLEDShow_Mode 0 "Off" 1 "Complete LED show (default)" 2 "Fast flash" ;
+VAL_ 2565808384 LEDManagementMode_Mode 0 "Single LED state enabled (default)" 2 "Single/multiple LED state enabled" ;
+VAL_ 2565808384 BaudRate_Select 2 "500 kbit/s" 3 "250 kbit/s" ;
+VAL_ 2565808384 PeriodicKeyState_Enable 0 "Disabled (default)" 1 "Enabled" ;
+VAL_ 2565808384 EventStateTx_Enable 0 "Disabled" 1 "Enabled (default)" ;
+VAL_ 2565808384 LEDAck_Enable 0 "Disabled (default)" 1 "Enabled" ;
+VAL_ 2565808384 AddressClaimAtBoot_Enable 0 "Disabled (default)" 1 "Enabled" ;
+VAL_ 2565808384 Heartbeat_Enable 0 "Disabled (default)" 1 "Enabled" ;
+VAL_ 2565808384 DemoMode_Enable 0 "Disabled (default)" 1 "Enabled" ;
+VAL_ 2565808384 DefaultBacklightColor_Color 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta (default: Amber, 8)" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" ;
+VAL_ 2565865249 KeyContactState_ContactState 0 "Released" 1 "Pressed" ;
+VAL_ 2561089792 LED1_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color2 value)" ;
+VAL_ 2561089792 LED2_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color2 value)" ;
+VAL_ 2561089792 LED3_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color2 value)" ;
+VAL_ 2561089792 LED4_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color2 value)" ;
+VAL_ 2561089792 LED5_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color2 value)" ;
+VAL_ 2561089792 LED6_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color2 value)" ;
+VAL_ 2561024256 LED1_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color1 value)" ;
+VAL_ 2561024256 LED2_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color1 value)" ;
+VAL_ 2561024256 LED3_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color1 value)" ;
+VAL_ 2561024256 LED4_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color1 value)" ;
+VAL_ 2561024256 LED5_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color1 value)" ;
+VAL_ 2561024256 LED6_Color 0 "Off" 1 "Red" 2 "Green" 3 "Blue" 4 "Yellow" 5 "Cyan" 6 "Magenta" 7 "White/light blue" 8 "Amber/orange" 9 "Yellow/green" 15 "Blink (paired with matching color1 value)" ;
