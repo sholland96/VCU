@@ -72,5 +72,23 @@
 
       <value name="VCU: GPS Fix Type" offset="6" length="1"></value>
     </frame>
+
+    <frame id="0xC90">
+      <!-- Not a real VCU telemetry field - a write-only UI control value so RealDash's
+           on-screen button can drive the Odroid's VU12 backlight. Consumed by
+           odroid/vu12_backlight.py via RealDash's Data Multicast feature (raw binary TCP,
+           port 6558) - confirmed on hardware as multicast ID 169 (0xA9). Must also be added
+           as an "ECU Specific value" inside RealDash itself (Settings) before it becomes
+           selectable in Data Multicast's value list - just having it in this XML and bound to
+           a button isn't enough, confirmed the hard way. A pure UI-only "Dummy" value (RealDash's
+           own built-in placeholder targetIds, or a custom name with no CAN-XML backing) never
+           appears in Data Multicast at all, regardless of that step - it has to come from a
+           CAN description file like this one.
+           The VCU never reads this (its TCP server only writes to RealDash) - the write-back
+           just lands unread in the socket buffer, which is harmless. Range matches the VU12
+           control protocol's native 0-255 scale directly, so the polling script needs no
+           percentage math. rangeMin=25 (~10%) keeps the backlight from ever going fully dark. -->
+      <value name="VCU: Backlight" offset="0" length="1" rangeMin="25" rangeMax="255"></value>
+    </frame>
   </frames>
 </RealDashCAN>

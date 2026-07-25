@@ -4,6 +4,49 @@ Snapshot of where this VCU firmware stands, for picking up development on anothe
 See `README.md` for the full hardware/protocol reference — this file is about *process*: what
 just happened, what's confirmed working, and what's still open.
 
+## VU12 backlight control from a RealDash on-screen button — confirmed working on hardware
+
+Goal: an on-screen push button/slider in RealDash controls the VU12 display's backlight, via a
+script on the Odroid writing to the display's control serial port (`/dev/ttyACM1`, WCH
+USB-serial — confirmed earlier as a *separate* interface from the GNSS receiver on `ttyACM0`).
+Files: `odroid/vu12_backlight.py` + `odroid/vu12-backlight.service` (deploy instructions in the
+service file's header comment), `dbc/realdash_vcu.xml` frame `0xC90`.
+
+**The original design assumed a RealDash HTTP API (`curl http://localhost:8000/values`,
+JSON) — this doesn't exist.** RealDash's real external-data mechanism is **Data Multicast**: a
+raw binary TCP server (default port 6558, mode "TCP/IP Server" in RealDash's settings), not
+HTTP/JSON at all. Decoded the wire format by capturing and cross-checking against known-good
+reference values (RPM ramp, real GPS coordinates): fixed 8-byte records, 1-byte `targetId`/
+ECU-specific ID + 3 bytes padding + 4-byte little-endian float32.
+
+**Getting a value to actually appear in that stream took three failed attempts before the
+fourth worked:**
+1. A pure UI-only custom `name="Dummy01"` value (no CAN-XML backing) — never appeared.
+2. RealDash's own built-in "Dummy 01" **standard targetId** (a real, working, on-screen-visible
+   value — confirmed via a text gauge) — still never appeared. Data Multicast's "select
+   multicast values" screen turned out to be a small, fixed, hardcoded allowlist (speed, RPM,
+   etc.) with no "Dummy" entries in it at all, and no way to add one.
+3. A genuine custom field defined via a CAN description file (`dbc/realdash_vcu.xml`, matching
+   how the working `VCU: Power` etc. fields are defined) — still didn't show up in the
+   selectable list.
+4. **What actually worked**: the same CAN-XML-defined field, but additionally registered as an
+   "ECU Specific value" inside RealDash's own settings — a separate, undocumented step beyond
+   having it in the XML and bound to a button. Once added there, it appeared in the multicast
+   value list, confirmed selectable, and showed up in the wire capture at **ID 169 (0xA9)**,
+   matching real button presses in real time.
+
+**Also found: this protocol can't be parsed reliably in bash.** The original script was bash;
+records routinely contain `0x00` bytes, which bash's `read` builtin can't hold in a string
+(NUL-terminates early / corrupts). Rewrote as Python (`vu12_backlight.py`), which handles
+binary sockets natively. Deployed as a systemd service (`vu12-backlight.service`), runs as the
+`ek9` user (already in the `dialout` group — no root needed for `/dev/ttyACM1`), auto-restarts
+on failure, enabled at boot. Confirmed working end-to-end: RealDash button → Data Multicast →
+service → serial → visible backlight change on the physical display.
+
+**Also hit again during this session, same recurring pattern as before:** RealDash froze
+partway through (TCP receive queue to the VCU backed up to 610KB, unread) — same kill+relaunch
+recovery recipe as documented elsewhere in this file worked again.
+
 ## PKP1600SI 6-button keypad — confirmed working on hardware
 
 Replaced the earlier 8-button pad with a Blink Marine PKP1600SI (6 buttons), same vendor/
