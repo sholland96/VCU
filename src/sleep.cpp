@@ -31,7 +31,7 @@ void enterSleep() {
   // that never called myGNSS.begin() (see setup()); the library's internal I2C port pointer
   // may be unset otherwise.
   if (gnssInitialized) {
-    // I2C cannot wake NEO-M8M from backup mode; EXTINT0 is the supported source.
+    // I2C cannot wake the module from backup mode; EXTINT0 is the supported source.
     myGNSS.powerOffWithInterrupt(0, VAL_RXM_PMREQ_WAKEUPSOURCE_EXTINT0);
     delay(500);
   }

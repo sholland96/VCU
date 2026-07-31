@@ -177,12 +177,17 @@ extern Adafruit_ADS1115 ads;
 #include <Wire.h>
 #include <SparkFun_u-blox_GNSS_Arduino_Library.h>
 
-// SK Pang board: NEO-M8M GNSS on I2C0 — Wire (SDA=pin 18, SCL=pin 19)
-// 1PPS output from NEO-M8M is routed to Teensy pin 35 on the SK Pang board.
+// SK Pang board: originally NEO-M8M, swapped to NEO-M8U, on I2C0 — Wire (SDA=pin 18, SCL=pin 19)
+// 1PPS output from the module is routed to Teensy pin 35 on the SK Pang board.
 // EXTINT header on SK Pang board wired to this Teensy output — rising edge
 // wakes the module from backup mode before AIRCR reset.
 #define GPS_PPS_PIN       35
-#define GNSS_EXTINT_PIN   33  // free GPIO — wire to NEO-M8M EXTINT header on SK Pang board
+#define GNSS_EXTINT_PIN   33  // free GPIO — wire to module's EXTINT header on SK Pang board
+// NEO-M8U swap: module doesn't reliably start its I2C/UART interface on power-on alone the
+// way the M8M did — confirmed on hardware that toggling !RST after power-up brings it up
+// every time. Bodge-wired from this free Teensy GPIO to JP6 pin 1 (RESET) on the SK Pang
+// board, which breaks out the module's RST pin (not connected to anything by default).
+#define GNSS_RESET_PIN    9
 
 // CAN transceiver standby — drive HIGH to put all three transceivers into standby during sleep.
 // STBY pins lifted from GND on SK Pang board and wired to this pin.

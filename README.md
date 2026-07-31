@@ -11,11 +11,11 @@ Built with PlatformIO / Arduino framework.
 
 | Item | Detail |
 |------|--------|
-| Carrier board | SK Pang Electronics Teensy 4.1 Triple CAN Board with ETH and u-blox NEO-M8M GNSS |
+| Carrier board | SK Pang Electronics Teensy 4.1 Triple CAN Board with ETH and u-blox GNSS (originally NEO-M8M, swapped to NEO-M8U) |
 | MCU | PJRC Teensy 4.1 (ARM Cortex-M7 @ 600 MHz) |
 | CAN transceivers | 3× on SK Pang board (CAN1/2/3); STBY pins lifted from GND and wired to pin 32 — driven HIGH in sleep to put all three into standby |
 | LIN transceivers | 2× MCP2003B *(placeholder — TBD)* — bus 1 on Serial6 (TX6=pin 24, RX6=pin 25); bus 2 *(planned)* on Serial7 (TX7=pin 29, RX7=pin 28) |
-| GNSS | u-blox NEO-M8M on I2C0 — Wire (SDA=pin 18, SCL=pin 19) |
+| GNSS | u-blox NEO-M8U on I2C0 — Wire (SDA=pin 18, SCL=pin 19). Needs an active reset pulse on `GNSS_RESET_PIN` (9, bodge-wired to JP6 pin 1/RESET on the SK Pang board) to reliably bring up its interface on power-on — the module doesn't self-initialize the way the original M8M did. |
 | ADC | ADS1115 16-bit 4-ch ADC on I2C0 (addr 0x48, GAIN\_ONE ±4.096 V, 860 SPS) |
 
 ### Powertrain
@@ -390,6 +390,7 @@ Key constants (`defines.h`):
 | 4 | CAN1 RX timing debug output |
 | 5 | CAN2 RX timing debug output |
 | 6 | `displayStatus()` timing debug output |
+| 9 | GNSS reset (`GNSS_RESET_PIN`) — bodge-wired to JP6 pin 1 (RESET) on the SK Pang board, which breaks out the NEO-M8U's RST pin (not connected to anything by default). Pulsed low-then-high in `setup()` before every `Wire`/GNSS init — the M8U doesn't reliably start its I2C interface on power-on alone. Not needed by the original NEO-M8M. |
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |

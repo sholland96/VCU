@@ -111,29 +111,50 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
 
 #ifdef UBLOX_GNSS
+  // NEO-M8U doesn't reliably bring up its I2C/UART interface from power-on alone (confirmed
+  // on two separate M8U units) — an active reset pulse is required. V_BKCP is battery-backed
+  // (coin cell) independently of this pin, so this doesn't clear ephemeris/RTC backup data;
+  // safe to do unconditionally on every boot, not just true cold power-on.
+  pinMode(GNSS_RESET_PIN, OUTPUT);
+  digitalWrite(GNSS_RESET_PIN, LOW);
+  delay(10);
+  digitalWrite(GNSS_RESET_PIN, HIGH);
+  delay(10);
+
   Wire.setClock(400 * 1000);//for U-blox GPS
   Wire.begin();
   Wire.setTimeout(50);             // 50ms — backup-wake I2C responses are slower
 
   // Skip GNSS bring-up entirely on a CAN-triggered wake (EVCC/gateway) — GNSS isn't needed
-  // to answer a pMBB32 status query, and the retry loop below is uncapped, so touching it
-  // here would risk an indefinite hang blocking a request that has nothing to do with GPS.
+  // to answer a pMBB32 status query, and blocking here has nothing to do with GPS.
   if (!extWakePending) {
     // GNSS was woken via EXTINT rising edge in enterSleep() before AIRCR reset;
-    // it hot-starts during Teensy setup().  Just wait for I2C to respond.
-    while (myGNSS.begin() == false)
-    {
+    // it hot-starts during Teensy setup().  Wait for I2C to respond, but bounded — this
+    // loop used to be uncapped and would hang all of setup() forever (blocking the entire
+    // vehicle, not just GNSS features) if the module never answered begin(), e.g. during
+    // the M8U swap when it wasn't yet clear whether it would respond the same way as the
+    // M8M. gnssInitialized stays false and everything downstream already gates on it, so
+    // continuing without GNSS is safe.
+    const uint32_t gnssRetryStart = millis();
+    const uint32_t GNSS_INIT_TIMEOUT_MS = 10000;
+    bool gnssFound = false;
+    while (millis() - gnssRetryStart < GNSS_INIT_TIMEOUT_MS) {
+      if (myGNSS.begin()) { gnssFound = true; break; }
       Serial.println(F("u-blox GNSS not detected — retrying"));
       delay(500);
     }
 
-    Serial.println("GNSS online");
-    gnssInitialized = true;
+    if (!gnssFound) {
+      Serial.println("GNSS not detected after 10s — continuing without it");
+    } else {
+      Serial.println("GNSS online");
+      gnssInitialized = true;
 
-    Serial.printf("setI2COutput:  %s\n", myGNSS.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA) ? "OK" : "FAIL");
-    Serial.printf("saveConfig:    %s\n", myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT) ? "OK" : "FAIL");
-    Serial.printf("setNavFreq:    %s\n", myGNSS.setNavigationFrequency(10) ? "OK" : "FAIL");
-    Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
+      Serial.printf("setI2COutput:  %s\n", myGNSS.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA) ? "OK" : "FAIL");
+      Serial.printf("saveConfig:    %s\n", myGNSS.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT) ? "OK" : "FAIL");
+      Serial.printf("setNavFreq:    %s\n", myGNSS.setNavigationFrequency(10) ? "OK" : "FAIL");
+      Serial.printf("setAutoPVT:    %s\n", myGNSS.setAutoPVTcallbackPtr(&printPVTdata) ? "OK" : "FAIL");
+    }
   }
 #endif
 
