@@ -38,12 +38,21 @@ def main():
     while True:
         try:
             with socket.create_connection((VCU_HOST, VCU_PORT), timeout=5) as sock:
-                # timeout=5 above only governs the connect handshake. Without clearing it,
-                # that same 5s timeout silently applies to recv() too, which was causing
-                # this to disconnect and reconnect every 5 seconds regardless of whether
-                # the VCU ever sent anything — confirmed via systemd journal, connect/
-                # timeout pairs every ~5-8s with no shutdown byte ever actually received.
+                # timeout=5 above only governs the connect handshake; clear it so recv()
+                # blocks indefinitely rather than tearing the connection down every 5s
+                # regardless of activity (an earlier bug here).
                 sock.settimeout(None)
+                # The VCU (Teensy) reboots on every sleep/wake cycle (AIRCR reset) without
+                # ever sending a FIN/RST — a rebooting peer can't, it has no memory of the
+                # old session. Without TCP keepalive, this socket would report ESTABLISHED
+                # forever and recv() would block until the heat death of the universe,
+                # even though the VCU's server is long gone (confirmed on hardware: `ss -tn`
+                # showed ESTAB minutes after the VCU had already reset). Keepalive actively
+                # probes the connection so a dead peer gets detected in ~9-12s instead.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 3)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
                 print(f"Connected to VCU shutdown signal at {VCU_HOST}:{VCU_PORT}")
                 while True:
                     data = sock.recv(1)
