@@ -138,23 +138,33 @@ void loop() {
 
     //timer.setTimer(30);// seconds
 
+  // Debounced KL15R read, shared by the relay block and the sleep-trigger block below —
+  // both used to read the raw pin independently, which let brief noise/bounce on KL15R
+  // repeatedly reset the Odroid shutdown sequence before its 15s timer could ever elapse
+  // (confirmed on hardware: hundreds of re-triggered signals, relay never actually cut).
+  // klrStableLow requires a full 500ms of continuous LOW, same margin already used for the
+  // sleep debounce, before either block treats the key as genuinely off.
+  bool klrHigh = digitalRead(KL15R_PIN);
+  if (klrHigh) klrLowSince = millis();
+  bool klrStableLow = !klrHigh && (millis() - klrLowSince > 500);
+
   // 12V relay power control, staged relative to KL15R/EVCC state.
   {
     // Relay #1: PDU-8/IVT-S/SIM100MOD/keypad — on whenever KL15R is high or an EVCC charge
     // session is active (mirrors EVCCsessionActive, which already keeps the VCU itself
     // awake during charging). No graceful-shutdown handling needed for these.
-    digitalWrite(RELAY_PDU_PIN, (digitalRead(KL15R_PIN) || EVCCsessionActive) ? HIGH : LOW);
+    digitalWrite(RELAY_PDU_PIN, (klrHigh || EVCCsessionActive) ? HIGH : LOW);
 
-    // Relay #2: Odroid + VU12. On KL15R low, signal the Odroid to shut down gracefully
-    // over the dedicated TCP link (odroid_shutdown.cpp — separate from the RealDash feed)
-    // and wait ODROID_SHUTDOWN_DELAY_MS before actually cutting power, so it has time to
-    // unmount/poweroff cleanly instead of losing power hot. The KLR sleep debounce below
-    // waits for this relay to actually be off before enterSleep() can fire, keeping the
-    // VCU (and its Ethernet link) awake for the whole sequence.
-    if (digitalRead(KL15R_PIN)) {
+    // Relay #2: Odroid + VU12. Once KL15R has been stably low, signal the Odroid to shut
+    // down gracefully over the dedicated TCP link (odroid_shutdown.cpp — separate from the
+    // RealDash feed) and wait ODROID_SHUTDOWN_DELAY_MS before actually cutting power, so it
+    // has time to unmount/poweroff cleanly instead of losing power hot. The KLR sleep
+    // debounce below waits for this relay to actually be off before enterSleep() can fire,
+    // keeping the VCU (and its Ethernet link) awake for the whole sequence.
+    if (klrHigh) {
       digitalWrite(RELAY_ODROID_PIN, HIGH);
       odroidShutdownSignaled = false;
-    } else if (digitalRead(RELAY_ODROID_PIN)) {
+    } else if (klrStableLow && digitalRead(RELAY_ODROID_PIN)) {
       if (!odroidShutdownSignaled) {
         odroidShutdownSignal();
         odroidShutdownSignaled = true;
@@ -166,7 +176,7 @@ void loop() {
   }
 
   // KL15R gone low (key off) while system is safe → hibernate.
-  // Debounce: only sleep after KL15R has been continuously LOW for 500ms.
+  // Debounce: only sleep after KL15R has been continuously LOW for 500ms (klrStableLow).
   // Gives the EVCC time to send New_Charge_Session (0x68001) after a CAN2 wake
   // before sleep is re-entered. Normal key-off behaviour is unchanged.
   // enterSleep() returns immediately if EVCCsessionActive (active charge session).
@@ -175,13 +185,12 @@ void loop() {
   // and sleeps promptly (skipping the debounce wait) right after that response is sent.
   // Also stays awake until RELAY_ODROID_PIN reads LOW — see the relay block above.
   {
-    if (digitalRead(KL15R_PIN)) {
-      klrLowSince = millis();
-    } else if (VCUstate == VCU_STATE_OFF && !digitalRead(RELAY_ODROID_PIN)) {
+    // klrLowSince is refreshed above whenever klrHigh — nothing left to do in that case.
+    if (!klrHigh && VCUstate == VCU_STATE_OFF && !digitalRead(RELAY_ODROID_PIN)) {
       if (gatewayResponseSent) {
         gatewayResponseSent = false;
         enterSleep();
-      } else if (!gatewayStatusRequestPending && millis() - klrLowSince > 500) {
+      } else if (!gatewayStatusRequestPending && klrStableLow) {
         enterSleep();
       }
     }
