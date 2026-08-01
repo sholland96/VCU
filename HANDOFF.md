@@ -35,12 +35,16 @@ the VCU stays awake for the whole handoff.
    probes) so a genuinely dead peer is detected in ~9-12s.
 
 Confirmed on hardware: VCU delivered the signal, Odroid ran a real `sudo shutdown -h now` and
-halted. Note: with the relay not yet physically wired, this is a genuine OS halt, not a power
-cut — bringing the Odroid back up needs a manual power cycle, not just a reboot command.
+halted. With the relay not physically wired yet at that point, this was a genuine OS halt, not a
+power cut — needed a manual power cycle to bring the Odroid back up, not just a reboot command.
 
-**Still open:** the actual relay driver hardware (pins 10/11 → real 12V switching) isn't wired
-yet, so nothing physically cuts power to either peripheral group today — the logic and signaling
-are proven, the physical wiring is the remaining step.
+**Relay hardware now wired and confirmed working end-to-end**, including the timing (Relay #1
+drops immediately with KL15R, Relay #2 holds through the signal+15s sequence before dropping).
+One wiring bug found and fixed along the way, not a firmware issue: the relays' LV/logic-side
+3.3V supply was itself being switched off with KL15R, so both relays' drivers lost their own
+operating power immediately regardless of what the GPIOs commanded — same symptom (both relays
+dropping instantly) as a firmware bug would produce, but the root cause was entirely in the
+driver supply wiring, not the code. Fixed by keeping that 3.3V rail on constant power.
 
 ## Sleep/wake reliability — root causes found and fixed on hardware
 
