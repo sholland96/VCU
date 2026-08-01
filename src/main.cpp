@@ -34,6 +34,7 @@ CAN_message_t LDUmsg;      // 0x201: pot (bytes 0-1) + canio (byte 4), sent ever
 bool     extWakePending   = false; // set in setup() when CAN wake detected; consumed by FSM
 uint32_t lastExtActivityMs = 0;    // last EVCC heartbeat or gateway frame (for KL15C timeout)
 uint32_t klrLowSince      = 0;     // reset in Off_enter() — start of Off-state KLR debounce
+uint32_t klrHighSince     = 0;     // mirror of klrLowSince — see defines.h
 bool     gnssInitialized  = false; // set in setup() only if GNSS bring-up actually ran this boot
 bool     kl15cKL15Rstate  = false; // tracks KL15R pin state inside KL15C for LED edge detect
 bool     evccIsACSession  = false; // true when plug type is AC → VCU closes main contactors
@@ -138,22 +139,28 @@ void loop() {
 
     //timer.setTimer(30);// seconds
 
-  // Debounced KL15R read, shared by the relay block and the sleep-trigger block below —
-  // both used to read the raw pin independently, which let brief noise/bounce on KL15R
-  // repeatedly reset the Odroid shutdown sequence before its 15s timer could ever elapse
-  // (confirmed on hardware: hundreds of re-triggered signals, relay never actually cut).
-  // klrStableLow requires a full 500ms of continuous LOW, same margin already used for the
-  // sleep debounce, before either block treats the key as genuinely off.
-  bool klrHigh = digitalRead(KL15R_PIN);
-  if (klrHigh) klrLowSince = millis();
-  bool klrStableLow = !klrHigh && (millis() - klrLowSince > 500);
+  // Debounced KL15R read, shared by the relay block and the sleep-trigger block below.
+  // klrStableLow requires a full 500ms of continuous LOW before either block treats the key
+  // as genuinely off (fixes an earlier bug: brief noise/bounce repeatedly reset the Odroid
+  // shutdown sequence before its 15s timer could ever elapse). klrStableHigh is the mirror
+  // for the reverse direction — confirmed on hardware that relay-driver switching noise can
+  // couple onto the KL15R sense line right as RELAY_ODROID_PIN de-energizes, which the raw
+  // (non-debounced) read was treating as a genuine key-on and immediately re-energizing the
+  // relay again — symptom: Odroid display goes dark then immediately reboots. Only a KL15R
+  // read that's been stably high for 500ms now counts as a real key-on for relay purposes.
+  bool klrRaw = digitalRead(KL15R_PIN);
+  if (klrRaw) klrLowSince  = millis(); else klrHighSince = millis();
+  bool klrStableLow  = !klrRaw && (millis() - klrLowSince  > 500);
+  bool klrStableHigh =  klrRaw && (millis() - klrHighSince > 500);
+  bool klrHigh = klrRaw; // raw value, still used below only where debounce isn't the concern
 
   // 12V relay power control, staged relative to KL15R/EVCC state.
   {
-    // Relay #1: PDU-8/IVT-S/SIM100MOD/keypad — on whenever KL15R is high or an EVCC charge
-    // session is active (mirrors EVCCsessionActive, which already keeps the VCU itself
-    // awake during charging). No graceful-shutdown handling needed for these.
-    digitalWrite(RELAY_PDU_PIN, (klrHigh || EVCCsessionActive) ? HIGH : LOW);
+    // Relay #1: PDU-8/IVT-S/SIM100MOD/keypad — on whenever KL15R is stably high or an EVCC
+    // charge session is active (mirrors EVCCsessionActive, which already keeps the VCU
+    // itself awake during charging). No graceful-shutdown handling needed for these; still
+    // drops immediately (no debounce) the instant KL15R reads low and EVCC isn't active.
+    digitalWrite(RELAY_PDU_PIN, (klrStableHigh || EVCCsessionActive) ? HIGH : LOW);
 
     // Relay #2: Odroid + VU12. Once KL15R has been stably low, signal the Odroid to shut
     // down gracefully over the dedicated TCP link (odroid_shutdown.cpp — separate from the
@@ -161,7 +168,7 @@ void loop() {
     // has time to unmount/poweroff cleanly instead of losing power hot. The KLR sleep
     // debounce below waits for this relay to actually be off before enterSleep() can fire,
     // keeping the VCU (and its Ethernet link) awake for the whole sequence.
-    if (klrHigh) {
+    if (klrStableHigh) {
       digitalWrite(RELAY_ODROID_PIN, HIGH);
       odroidShutdownSignaled = false;
     } else if (klrStableLow && digitalRead(RELAY_ODROID_PIN)) {

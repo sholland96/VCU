@@ -59,7 +59,11 @@ extern State state_Fault;
 extern State state_KL15C;
 
 extern bool extWakePending; // set in setup() when CAN wake detected; consumed by FSM
-extern uint32_t klrLowSince; // reset in Off_enter() — start of Off-state KLR debounce
+extern uint32_t klrLowSince;  // reset in Off_enter() — start of Off-state KLR debounce
+extern uint32_t klrHighSince; // mirror of klrLowSince — debounces KL15R read-as-high, so
+                               // relay-driver switching noise on the sense line can't
+                               // spuriously re-energize RELAY_ODROID_PIN right after a
+                               // genuine key-off cuts it
 extern bool gnssInitialized; // set in setup() only if GNSS bring-up actually ran this boot
 
 // FSM events — unique integers required by arduino-fsm
