@@ -11,6 +11,7 @@
 #include "can_handlers.h"
 #include "callbacks.h"
 #include "realdash_tcp.h"
+#include "odroid_shutdown.h"
 
 using namespace TeensyTimerTool;
 
@@ -163,7 +164,14 @@ void setup() {
   // timeout can help if bring-up here ever stalls the fast-response path.
   if (!extWakePending) {
     realdashInit();
+    odroidShutdownInit(); // separate TCP port on the same Ethernet interface — see odroid_shutdown.h
   }
+
+  pinMode(RELAY_PDU_PIN, OUTPUT);
+  digitalWrite(RELAY_PDU_PIN, LOW);
+  pinMode(RELAY_ODROID_PIN, OUTPUT);
+  digitalWrite(RELAY_ODROID_PIN, LOW);
+  // Both corrected within the first loop() pass based on actual KL15R/EVCC state — see loop().
 
   // ADS1115 — I2C0 shares Wire with GNSS (already started above).
   if (!ads.begin(ADS1115_ADDR)) {

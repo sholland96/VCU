@@ -189,6 +189,18 @@ extern Adafruit_ADS1115 ads;
 // board, which breaks out the module's RST pin (not connected to anything by default).
 #define GNSS_RESET_PIN    9
 
+// 12V relay power control — VCU-switched power to peripheral groups, staged relative to
+// KL15R/EVCC state (see loop() for the actual on/off logic).
+#define RELAY_PDU_PIN     10  // PDU-8, IVT-S, SIM100MOD, keypad
+#define RELAY_ODROID_PIN  11  // Odroid M2 + VU12 display — needs graceful shutdown signal before cutting power
+
+// Delay between signaling the Odroid to shut down (see odroid_shutdown.cpp) and actually
+// cutting RELAY_ODROID_PIN — margin for a normal Armbian graceful shutdown to complete.
+#define ODROID_SHUTDOWN_DELAY_MS  15000UL
+
+extern bool     odroidShutdownSignaled;   // true once the TCP signal has been sent this KL15R-low cycle
+extern uint32_t odroidShutdownSignalTime; // millis() when it was sent
+
 // CAN transceiver standby — drive HIGH to put all three transceivers into standby during sleep.
 // STBY pins lifted from GND on SK Pang board and wired to this pin.
 #define CAN_STBY_PIN      32
