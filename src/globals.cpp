@@ -102,8 +102,9 @@ uint8_t  battPumpStatus   = 0;
 uint8_t  battPumpFaults   = 0;
 uint8_t  battPumpSetpoint = 0;
 
-bool     odroidShutdownSignaled   = false;
-uint32_t odroidShutdownSignalTime = 0;
+bool     odroidShutdownSignaled    = false;
+uint32_t odroidShutdownSignalTime  = 0;
+uint32_t odroidShutdownLastAttempt = 0;
 
 uint8_t  EVCCstage          = 0;     // Advantics_Controller_Status.State from 0x68009
 uint8_t  EVCCplugType       = 0;     // Plug_and_pins from New_Charge_Session

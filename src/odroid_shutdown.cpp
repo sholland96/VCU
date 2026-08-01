@@ -29,11 +29,12 @@ void odroidShutdownService() {
   }
 }
 
-void odroidShutdownSignal() {
+bool odroidShutdownSignal() {
   if (shutdownClient && shutdownClient.connected()) {
     shutdownClient.write((uint8_t)1);
     Serial.println("Odroid shutdown signal: sent");
-  } else {
-    Serial.println("Odroid shutdown signal: no watcher connected — nothing to send");
+    return true;
   }
+  Serial.println("Odroid shutdown signal: no watcher connected — nothing to send");
+  return false;
 }

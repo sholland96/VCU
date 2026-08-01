@@ -198,8 +198,9 @@ extern Adafruit_ADS1115 ads;
 // cutting RELAY_ODROID_PIN — margin for a normal Armbian graceful shutdown to complete.
 #define ODROID_SHUTDOWN_DELAY_MS  15000UL
 
-extern bool     odroidShutdownSignaled;   // true once the TCP signal has been sent this KL15R-low cycle
-extern uint32_t odroidShutdownSignalTime; // millis() when it was sent
+extern bool     odroidShutdownSignaled;    // true once the TCP signal is confirmed delivered this cycle
+extern uint32_t odroidShutdownSignalTime;  // millis() when it was confirmed delivered
+extern uint32_t odroidShutdownLastAttempt; // millis() of the last delivery attempt — retry-rate limit
 
 // CAN transceiver standby — drive HIGH to put all three transceivers into standby during sleep.
 // STBY pins lifted from GND on SK Pang board and wired to this pin.

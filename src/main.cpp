@@ -166,9 +166,16 @@ void loop() {
       odroidShutdownSignaled = false;
     } else if (klrStableLow && digitalRead(RELAY_ODROID_PIN)) {
       if (!odroidShutdownSignaled) {
-        odroidShutdownSignal();
-        odroidShutdownSignaled = true;
-        odroidShutdownSignalTime = millis();
+        // Retry at most once/second until actually delivered (a connected client at the
+        // moment of the call) — a single one-shot attempt could silently miss if the
+        // Odroid-side watcher's TCP connection happens to be mid-reconnect right then.
+        if (millis() - odroidShutdownLastAttempt >= 1000) {
+          odroidShutdownLastAttempt = millis();
+          if (odroidShutdownSignal()) {
+            odroidShutdownSignaled = true;
+            odroidShutdownSignalTime = millis();
+          }
+        }
       } else if (millis() - odroidShutdownSignalTime >= ODROID_SHUTDOWN_DELAY_MS) {
         digitalWrite(RELAY_ODROID_PIN, LOW);
       }

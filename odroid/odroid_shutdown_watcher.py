@@ -38,6 +38,12 @@ def main():
     while True:
         try:
             with socket.create_connection((VCU_HOST, VCU_PORT), timeout=5) as sock:
+                # timeout=5 above only governs the connect handshake. Without clearing it,
+                # that same 5s timeout silently applies to recv() too, which was causing
+                # this to disconnect and reconnect every 5 seconds regardless of whether
+                # the VCU ever sent anything — confirmed via systemd journal, connect/
+                # timeout pairs every ~5-8s with no shutdown byte ever actually received.
+                sock.settimeout(None)
                 print(f"Connected to VCU shutdown signal at {VCU_HOST}:{VCU_PORT}")
                 while True:
                     data = sock.recv(1)

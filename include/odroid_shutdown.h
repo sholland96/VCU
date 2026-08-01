@@ -8,4 +8,7 @@
 
 void odroidShutdownInit();    // call once from setup(), after realdashInit() (same Ethernet.begin())
 void odroidShutdownService(); // call from loop() — accepts the Odroid-side watcher's connection
-void odroidShutdownSignal();  // call once when KL15R goes low — writes the shutdown byte
+bool odroidShutdownSignal();  // attempts to write the shutdown byte; returns true only if a
+                               // client was actually connected to receive it — caller should
+                               // keep retrying until this returns true, not treat a single
+                               // call as delivery
