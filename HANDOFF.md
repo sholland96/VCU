@@ -4,6 +4,44 @@ Snapshot of where this VCU firmware stands, for picking up development on anothe
 See `README.md` for the full hardware/protocol reference — this file is about *process*: what
 just happened, what's confirmed working, and what's still open.
 
+## 12V relay power control + Odroid graceful shutdown — confirmed working end-to-end on hardware
+
+Two relays, staged relative to KL15R/EVCC state (`RELAY_PDU_PIN`=10, `RELAY_ODROID_PIN`=11):
+Relay #1 (PDU-8, IVT-S, SIM100MOD, keypad) follows `klrHigh || EVCCsessionActive` directly, no
+graceful-shutdown handling needed. Relay #2 (Odroid + VU12) is the interesting one — once KL15R
+has been stably low, the VCU signals the Odroid over a dedicated TCP link (`odroid_shutdown.cpp`,
+port 35001, separate from RealDash's single-client feed on 35000 so neither connection can kick
+the other off) and waits 15s before cutting power, so Armbian gets a real graceful shutdown
+instead of losing power hot. `enterSleep()` now waits for Relay #2 to read off before firing, so
+the VCU stays awake for the whole handoff.
+
+**Bugs found and fixed via live testing, in order:**
+1. Both the relay block and the sleep-trigger block independently called
+   `digitalRead(KL15R_PIN)` raw, unlike the existing (debounced) sleep-trigger logic elsewhere —
+   brief noise/bounce on KL15R repeatedly reset the shutdown sequence before its 15s timer could
+   ever elapse. Fixed: one shared debounced read (`klrHigh`/`klrStableLow`) per `loop()` pass.
+2. The VCU marked the signal as delivered after a single attempt regardless of whether a client
+   was actually connected at that instant — a signal sent during one of the Odroid watcher's
+   reconnect gaps was silently lost. Fixed: `odroidShutdownSignal()` returns whether it actually
+   delivered; the caller retries once/second until it does.
+3. `odroid_shutdown_watcher.py`: `socket.create_connection(..., timeout=5)` applies that timeout
+   to every operation on the socket, not just the connect handshake — including the `recv(1)`
+   meant to block indefinitely, causing the watcher to disconnect/reconnect every ~5s regardless
+   of VCU activity. Fixed with `sock.settimeout(None)` once connected.
+4. Still not enough on its own: the VCU reboots on every sleep/wake cycle (`AIRCR` reset) without
+   ever sending a FIN/RST, so a stale pre-reboot connection would sit reporting `ESTABLISHED`
+   forever on the Odroid side (confirmed via `ss -tn` minutes after the VCU had already reset),
+   never reconnecting to the VCU's new server. Fixed with TCP keepalive (3s idle/interval, 3
+   probes) so a genuinely dead peer is detected in ~9-12s.
+
+Confirmed on hardware: VCU delivered the signal, Odroid ran a real `sudo shutdown -h now` and
+halted. Note: with the relay not yet physically wired, this is a genuine OS halt, not a power
+cut — bringing the Odroid back up needs a manual power cycle, not just a reboot command.
+
+**Still open:** the actual relay driver hardware (pins 10/11 → real 12V switching) isn't wired
+yet, so nothing physically cuts power to either peripheral group today — the logic and signaling
+are proven, the physical wiring is the remaining step.
+
 ## Sleep/wake reliability — root causes found and fixed on hardware
 
 Started from a report that Teensy standby current had risen from ~4 mA to ~23 mA once the
