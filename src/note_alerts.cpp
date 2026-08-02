@@ -81,20 +81,4 @@ void notecardSendAlert(uint8_t code) {
   JAddItemToObject(req, "body", body);
   bool ok = notecard.sendRequest(req);
   Serial.printf("Notecard alert \"%s\": %s\n", alertMessage(code), ok ? "sent" : "FAILED");
-
-  // TEMPORARY DIAGNOSTIC — "sync":true above should force an immediate sync, but the
-  // modem was still showing {modem-off} a minute later even after this succeeded.
-  // Explicitly force hub.sync and watch card.wireless every 2s for the next ~14s, to see
-  // whether the modem actually attempts to power on at all right after being asked, rather
-  // than waiting on the sparse 60s-interval background check to maybe catch it. Blocking
-  // is acceptable here — this only runs once per Idle/Fault entry, not continuously — but
-  // remove this whole block once cellular connectivity is confirmed working.
-  Serial.printf("Notecard hub.sync: %s\n",
-                notecard.sendRequest(notecard.newRequest("hub.sync")) ? "requested" : "FAILED");
-  for (uint8_t i = 0; i < 7; i++) {
-    delay(2000);
-    Serial.printf("Notecard card.wireless (+%us):\n", (i + 1) * 2);
-    J *wrsp = notecard.requestAndResponse(notecard.newRequest("card.wireless"));
-    if (wrsp) notecard.deleteResponse(wrsp);
-  }
 }
