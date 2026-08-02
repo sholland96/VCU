@@ -17,12 +17,13 @@ static const char *PRODUCT_UID = "com.gmail.stephen.holland:ek9_vcu";
 
 void notecardInit() {
   notecard.begin(); // I2C, default address 0x17, Wire (shared with GNSS/ADS1115 on I2C0)
+  notecard.setDebugOutputStream(Serial); // verbose request/response logging while bringing this up
 
   J *req = notecard.newRequest("hub.set");
   JAddStringToObject(req, "product", PRODUCT_UID);
   JAddStringToObject(req, "mode", "periodic");
   JAddNumberToObject(req, "outbound", 60); // sync at least hourly even without an explicit alert
-  notecard.sendRequest(req);
+  Serial.printf("Notecard hub.set: %s\n", notecard.sendRequest(req) ? "OK" : "FAIL");
 }
 
 // Mirrors the old 0xC79 SMS message codes — see README's "0xC79 SMS message codes" table.
@@ -46,5 +47,6 @@ void notecardSendAlert(uint8_t code) {
   JAddNumberToObject(body, "code", code);
   JAddStringToObject(body, "message", alertMessage(code));
   JAddItemToObject(req, "body", body);
-  notecard.sendRequest(req);
+  bool ok = notecard.sendRequest(req);
+  Serial.printf("Notecard alert \"%s\": %s\n", alertMessage(code), ok ? "sent" : "FAILED");
 }
