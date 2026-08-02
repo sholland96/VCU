@@ -200,7 +200,10 @@ extern Adafruit_ADS1115 ads;
 
 // Delay between signaling the Odroid to shut down (see odroid_shutdown.cpp) and actually
 // cutting RELAY_ODROID_PIN — margin for a normal Armbian graceful shutdown to complete.
-#define ODROID_SHUTDOWN_DELAY_MS  15000UL
+// Measured on hardware: networking (an early-ish milestone in the shutdown sequence, not
+// necessarily the final disk sync/unmount) goes down ~6s after the signal; 10s keeps some
+// margin above that observed floor rather than cutting it exactly at the measured point.
+#define ODROID_SHUTDOWN_DELAY_MS  10000UL
 
 extern bool     odroidShutdownSignaled;    // true once the TCP signal is confirmed delivered this cycle
 extern uint32_t odroidShutdownSignalTime;  // millis() when it was confirmed delivered
