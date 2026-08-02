@@ -269,8 +269,14 @@ Ethernet link to the Odroid M2 display (`realdash_tcp.cpp`), so RealDash can con
 over TCP instead of needing a physical CAN-to-USB adapter. VCU runs a TCP server on
 `192.168.10.10:35000` (Odroid at `192.168.10.1`, direct point-to-point cable, static IPs, no
 DHCP); RealDash connects as the client and streams RealDash's native "44" frame format (4-byte
-tag `0x44,0x33,0x22,0x11` + 4-byte little-endian CAN ID + 8-byte payload). CAN definition file
-for RealDash to import: `dbc/realdash_vcu.xml`. Skipped on CAN-wake (`KL15C`) boots along with
+tag `0x44,0x33,0x22,0x11` + 4-byte little-endian CAN ID + 8-byte payload). The VCU broadcasts to
+a small pool of up to 3 simultaneous connections rather than trying to track a single "real"
+client — after several failed attempts to reliably detect which one connection was stale/dead
+(the Odroid now reboots routinely from the relay/shutdown feature, and RealDash itself normally
+holds multiple simultaneous connections as routine behavior, not a sign of anything broken — see
+`realdash_tcp.cpp`'s header comment for the full history), broadcasting sidesteps the question
+entirely. CAN definition file for RealDash to import: `dbc/realdash_vcu.xml`. Skipped on CAN-wake
+(`KL15C`) boots along with
 GNSS, to keep that path's response time unaffected. Confirmed on hardware; `groundSpeed`
 (mph) and `GPSaltitude` (ft) are converted from the GNSS module's raw mm/s and mm units in
 `printPVTdata()` (`init.cpp`) before being packed into `0xC82`. RPM, power, motor/pack temp,
