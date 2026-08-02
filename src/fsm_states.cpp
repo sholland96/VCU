@@ -15,6 +15,29 @@ void Off_enter()
   VCUstate = VCU_STATE_OFF;
   sdLogEvent("STATE:OFF");
   klrLowSince = millis(); // reset debounce — give a fresh 500ms grace period before re-sleeping
+
+  // Off is entered from several different states (Idle, Fault via FAULT_CLEAR, etc.) via
+  // several different paths, and not all of them explicitly commanded the contactors open
+  // or cleared whatever keypad LED they'd set — previously documented gap (HANDOFF.md):
+  // an Idle->Off transition could leave the contactor PWM state as whatever it last was.
+  // Off should always mean fully de-energized regardless of how we got here, so force it
+  // here once rather than duplicating this in every individual exit path.
+  PDUmsg1.buf[0] = 0x00; // CH1 off — negative contactor
+  PDUmsg1.buf[2] = 0x00; // CH3 off — pre-charge relay
+  PDUmsg1.buf[3] = 0x00; // CH4 off — positive contactor
+
+  msg2.id             = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len            = 8;
+  msg2.buf[0]         = 0x04;
+  msg2.buf[1]         = 0x1B;
+  msg2.buf[2]         = KEYPAD_CMD_SET_LED;
+  msg2.buf[3]         = KEYPAD_KEY_START_STOP;
+  msg2.buf[4]         = KEYPAD_COLOR_OFF;
+  msg2.buf[5]         = KEYPAD_MODE_SOLID;
+  msg2.buf[6]         = 0x00;
+  msg2.buf[7]         = 0xFF;
+  can2.write(msg2);
 }
 
 void Off_exit()
