@@ -74,13 +74,19 @@ static void realdashSendFrame(uint32_t canId, const uint8_t *payload) {
 void realdashService() {
   if (!ethernetUp) return;
 
-  if (!realdashClient || !realdashClient.connected()) {
-    EthernetClient incoming = realdashServer.accept();
-    if (incoming) {
-      realdashClient.stop();
-      realdashClient = incoming;
-      Serial.println("RealDash: client connected");
-    }
+  // Always accept a fresh incoming connection immediately, regardless of whether the
+  // current client still looks connected — a genuinely new SYN is strong evidence the old
+  // peer is gone. Previously gated on !realdashClient.connected(), which can fail to
+  // detect a peer that vanished without a clean FIN/RST (e.g. the Odroid rebooting, which
+  // now happens routinely from the relay/shutdown feature). Confirmed on hardware: RealDash
+  // stuck repeatedly showing "trying to connect" while the VCU kept holding onto a stale
+  // client from before the Odroid's last reboot, never calling accept() for the new one.
+  // accept() itself is non-blocking either way, so calling it unconditionally is cheap.
+  EthernetClient incoming = realdashServer.accept();
+  if (incoming) {
+    if (realdashClient) realdashClient.stop();
+    realdashClient = incoming;
+    Serial.println("RealDash: client connected");
   }
 
   // Drain whatever displayStatus() queued since the last loop() pass (main context only —
