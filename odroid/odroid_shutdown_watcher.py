@@ -31,13 +31,15 @@ RECONNECT_DELAY_S = 3
 
 def trigger_shutdown():
     print("Shutdown signal received from VCU — shutting down now")
-    # Kill RealDash explicitly before triggering the OS shutdown. RealDash isn't run under
-    # a systemd service (its processes show ppid=1 — whatever launched it at boot already
-    # exited), so during a normal shutdown it's at the mercy of teardown ordering; observed
-    # on hardware: the app visibly stops and restarts once before finally staying down,
-    # consistent with something racing to relaunch it while the shutdown sequence is also
-    # trying to kill it. Killing it ourselves first, before shutdown starts, removes that
-    # race entirely rather than relying on the normal teardown order to sort it out.
+    # Just killing RealDash wasn't enough (confirmed on hardware: it kept coming back).
+    # Root cause: nodm.service is an auto-login X session manager whose whole job is to
+    # respawn the X session if it exits, and /home/ek9/.xsession.new is literally just
+    # "exec /usr/bin/realdash" with no wrapper — so killing RealDash kills the entire X
+    # session, which nodm dutifully restarts (NODM_MIN_SESSION_TIME in /etc/default/nodm
+    # documents this exact behavior). Stopping nodm itself removes the supervisor, not just
+    # the supervised app. pkill kept as a fast belt-and-suspenders in case nodm takes a
+    # moment to tear the session down.
+    subprocess.run(["sudo", "systemctl", "stop", "nodm"], check=False)
     subprocess.run(["sudo", "pkill", "-f", "realdash"], check=False)
     time.sleep(1)
     subprocess.run(["sudo", "shutdown", "-h", "now"], check=False)
