@@ -2,8 +2,29 @@
  *
  * RealDash connects as a TCP client to this device on port 35000 and expects a stream of
  * "44" frames: 4-byte tag + 4-byte little-endian CAN ID + up to 8 bytes of payload, no CRC.
- * Only one dashboard is ever attached, so a single client slot is enough — a new incoming
- * connection replaces whatever was there before.
+ *
+ * Only one dashboard is ever really attached, but figuring out *in software* which held
+ * connection is "the real one" turned out to be unreliable in both directions — tried and
+ * discarded on hardware:
+ *   - Single client slot, only replaced once !connected(): fails to detect a peer that
+ *     vanished without a clean FIN/RST (e.g. the Odroid rebooting, which now happens
+ *     routinely from the relay/shutdown feature) — the VCU keeps "feeding" a dead
+ *     connection forever and never accepts RealDash's fresh reconnect attempt.
+ *   - Single client slot, always replaced by any new incoming connection: RealDash is
+ *     confirmed (repeatedly, on hardware) to routinely hold 2-3 simultaneous connections
+ *     to this port as normal behavior, so this fired on completely healthy state and
+ *     killed a perfectly good, actively-used connection — visible as data repeatedly
+ *     stopping and restarting.
+ *   - Single client slot, replaced only once local write() had failed for a while: doesn't
+ *     work either — TCP write() typically just queues into the local send buffer and can
+ *     keep "succeeding" for a long time even to a peer that's completely gone, since
+ *     nothing forces an ACK-based liveness check on the timescale that matters here.
+ *
+ * Sidesteps the whole question instead: hold a small pool of connections and broadcast the
+ * same frames to all of them. It doesn't matter which one RealDash is actually reading from
+ * — it'll get fed regardless — and a stale/orphaned connection sitting in the pool alongside
+ * the real one is harmless (small fixed memory cost, lwIP is configured for 8 total TCP PCBs
+ * on this stack, comfortably more than needed here).
  */
 #include <Arduino.h>
 #include <QNEthernet.h>
@@ -20,20 +41,12 @@ static const IPAddress ODROID_IP(192, 168, 10, 1);
 static const uint16_t REALDASH_TCP_PORT = 35000;
 
 static EthernetServer realdashServer(REALDASH_TCP_PORT);
-static EthernetClient realdashClient;
 static bool ethernetUp = false;
 
-// Time of the last write() that actually reported sending data — the real signal for
-// "this client is genuinely alive", since realdashClient.connected() can fail to detect a
-// peer that vanished without a clean FIN/RST (e.g. the Odroid rebooting, which now happens
-// routinely from the relay/shutdown feature) for a long time or indefinitely. A stale
-// timeout here is what actually distinguishes a dead client from a live one — NOT the mere
-// arrival of a new incoming connection: RealDash is confirmed (on hardware, repeatedly) to
-// routinely hold 2-3 simultaneous connections to this port as normal behavior, so treating
-// every new SYN as proof the old client is dead caused constant unnecessary switching away
-// from a perfectly good, actively-used connection (stop/restart data cycling).
-static uint32_t lastGoodWriteMs = 0;
-static const uint32_t CLIENT_STALE_TIMEOUT_MS = 5000; // real cadence is ~62.5ms, 5s is generous
+// Small connection pool, broadcast to — see file header for why this replaced a
+// single-client-slot design.
+static const uint8_t MAX_REALDASH_CLIENTS = 3;
+static EthernetClient realdashClients[MAX_REALDASH_CLIENTS];
 
 // displayStatus() runs from callback_t1(), a hardware-timer ISR (same category as
 // callback_t2(), where SD-card I/O was already found to be unsafe — see sdLogPending in
@@ -80,30 +93,29 @@ static void realdashSendFrame(uint32_t canId, const uint8_t *payload) {
   packet[6] = (uint8_t)(canId >> 16);
   packet[7] = (uint8_t)(canId >> 24);
   memcpy(packet + 8, payload, 8);
-  size_t sent = realdashClient.write(packet, sizeof(packet));
-  if (sent == sizeof(packet)) lastGoodWriteMs = millis();
+  for (uint8_t i = 0; i < MAX_REALDASH_CLIENTS; i++) {
+    if (realdashClients[i] && realdashClients[i].connected()) {
+      realdashClients[i].write(packet, sizeof(packet));
+    }
+  }
 }
 
 void realdashService() {
   if (!ethernetUp) return;
 
-  bool clientStale = !realdashClient || !realdashClient.connected() ||
-                      (millis() - lastGoodWriteMs > CLIENT_STALE_TIMEOUT_MS);
-
+  // Adopt any newly-arrived connection into the first free (or dead) slot. If every slot is
+  // genuinely occupied by a live connection already (all MAX_REALDASH_CLIENTS in active
+  // use — not expected in practice, only one real dashboard is ever attached), evict slot 0
+  // rather than silently dropping the new connection.
   EthernetClient incoming = realdashServer.accept();
   if (incoming) {
-    if (clientStale) {
-      // Current client is dead (or there wasn't one) — take over.
-      if (realdashClient) realdashClient.stop();
-      realdashClient = incoming;
-      lastGoodWriteMs = millis();
-      Serial.println("RealDash: client connected");
-    } else {
-      // Current client is still actively receiving data — RealDash routinely opens extra
-      // simultaneous connections as normal behavior, not just when something's broken, so
-      // a new SYN alone isn't reason enough to drop a working connection. Politely refuse.
-      incoming.stop();
+    uint8_t slot = 0;
+    for (uint8_t i = 0; i < MAX_REALDASH_CLIENTS; i++) {
+      if (!realdashClients[i] || !realdashClients[i].connected()) { slot = i; break; }
     }
+    if (realdashClients[slot]) realdashClients[slot].stop();
+    realdashClients[slot] = incoming;
+    Serial.printf("RealDash: client connected (slot %u)\n", slot);
   }
 
   // Drain whatever displayStatus() queued since the last loop() pass (main context only —
@@ -113,9 +125,7 @@ void realdashService() {
   queuedFrameCount = 0;
   interrupts();
 
-  if (count > 0 && realdashClient && realdashClient.connected()) {
-    for (uint8_t i = 0; i < count; i++) {
-      realdashSendFrame(queuedFrames[i].canId, queuedFrames[i].payload);
-    }
+  for (uint8_t i = 0; i < count; i++) {
+    realdashSendFrame(queuedFrames[i].canId, queuedFrames[i].payload);
   }
 }
