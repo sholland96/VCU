@@ -391,6 +391,8 @@ Key constants (`defines.h`):
 | 5 | CAN2 RX timing debug output |
 | 6 | `displayStatus()` timing debug output |
 | 9 | GNSS reset (`GNSS_RESET_PIN`) — bodge-wired to JP6 pin 1 (RESET) on the SK Pang board, which breaks out the NEO-M8U's RST pin (not connected to anything by default). Pulsed low-then-high in `setup()` before every `Wire`/GNSS init — the M8U doesn't reliably start its I2C interface on power-on alone. Not needed by the original NEO-M8M. |
+| 10 | 12V relay control (`RELAY_PDU_PIN`) — PDU-8, IVT-S, SIM100MOD, keypad. See [12V Relay Power Control](#12v-relay-power-control--odroid-graceful-shutdown). |
+| 11 | 12V relay control (`RELAY_ODROID_PIN`) — Odroid M2 + VU12 display. See [12V Relay Power Control](#12v-relay-power-control--odroid-graceful-shutdown). |
 | 13 | Built-in LED (1 Hz heartbeat) |
 | 18 (SDA) | GNSS I2C data — Wire / I2C0 |
 | 19 (SCL) | GNSS I2C clock — Wire / I2C0 |
@@ -414,7 +416,7 @@ The VCU uses two top-level regions separated by the physical key switch:
 
 Turning the key to position 1 (KLR) powers up the Teensy, display and all controllers. The VCU boots in the **Off** state and waits for the Start/Stop button (keypad key 1).
 
-Turning the key off (KLR low) while in the Off state triggers `enterSleep()` after a 500 ms debounce (KLR must be continuously low for 500 ms). The debounce gives the EVCC time to send `New_Charge_Session` (0x68001) after a CAN2 wake before sleep is re-entered. `enterSleep()` returns immediately if `EVCCsessionActive` is true (active charge session), keeping the VCU awake without KLR.
+Turning the key off (KLR low) while in the Off state triggers `enterSleep()` after a 500 ms debounce (KLR must be continuously low for 500 ms). The debounce gives the EVCC time to send `New_Charge_Session` (0x68001) after a CAN2 wake before sleep is re-entered. `enterSleep()` returns immediately if `EVCCsessionActive` is true (active charge session), keeping the VCU awake without KLR. `enterSleep()` also can't fire until `RELAY_ODROID_PIN` reads LOW — see [12V Relay Power Control](#12v-relay-power-control--odroid-graceful-shutdown) — so the VCU stays awake for the whole Odroid shutdown handoff before actually sleeping.
 
 1. All four timers stop; heartbeat LED is forced off.
 2. USB PHY is powered down (`USBPHY1_PWD = 0xFFFFFFFF`) and its CCM clock gated.
@@ -505,6 +507,63 @@ If `extWakePending` is set, `fsm.trigger(EXT_WAKE)` fires before the main loop, 
 
 ---
 
+## 12V Relay Power Control + Odroid Graceful Shutdown
+
+Two VCU-switched 12V relays, staged relative to KL15R/EVCC state:
+
+| Relay | Pin | Loads | Turns ON | Turns OFF |
+|-------|-----|-------|----------|-----------|
+| #1 | `RELAY_PDU_PIN` (10) | PDU-8, IVT-S, SIM100MOD, keypad | KL15R stably high (500 ms debounce) or `EVCCsessionActive` | Immediately, no delay, once neither condition holds |
+| #2 | `RELAY_ODROID_PIN` (11) | Odroid M2 + VU12 display | KL15R stably high (500 ms debounce) | Once KL15R has been stably low **and** the Odroid shutdown sequence below has completed |
+
+Both "on" conditions require `klrStableHigh` (KL15R read continuously high for 500 ms), not the
+raw pin — relay-driver coil switching noise on the KL15R sense line was confirmed on hardware to
+read as a brief spurious high and immediately re-energize a relay that had just correctly been
+cut. `klrStableLow` (the mirror, same 500 ms margin) gates the "off" side the same way for Relay
+#2's shutdown trigger.
+
+**Odroid shutdown sequence** (`odroid_shutdown.cpp`): once KL15R is stably low, the VCU signals
+the Odroid over a dedicated TCP link on port 35001 — a separate `EthernetServer` from RealDash's
+own feed on port 35000, so a duplicate/stale connection on one link can't affect the other. The
+VCU retries the signal at most once/second until a client is actually connected to receive it
+(`odroidShutdownSignal()` returns whether it delivered — a single one-shot attempt can silently
+miss if the watcher happens to be mid-reconnect). Once delivered, the VCU waits
+`ODROID_SHUTDOWN_DELAY_MS` (10 s — measured on hardware: Linux networking goes down ~6 s after the
+signal, 10 s keeps some margin above that) before actually cutting `RELAY_ODROID_PIN`.
+
+On the Odroid side, `odroid/odroid_shutdown_watcher.py` (deployed as a systemd service) connects
+to the VCU's port 35001 and waits for a single byte. On receipt, it:
+1. Stops `nodm.service` — the auto-login X session manager. This is the important step: killing
+   RealDash alone doesn't work, because `/home/ek9/.xsession.new` is literally
+   `exec /usr/bin/realdash` with no wrapper, so killing RealDash kills the whole X session, which
+   `nodm` (whose entire purpose is auto-respawning that session) dutifully restarts. Stopping
+   `nodm` removes the supervisor, not just the supervised app.
+2. `pkill -f realdash` as a fast belt-and-suspenders.
+3. `sudo shutdown -h now`.
+
+Requires TCP keepalive (3 s idle/interval, 3 probes) on the watcher's socket — the VCU reboots on
+every sleep/wake cycle (`AIRCR` reset) without ever sending a FIN/RST, so without keepalive a
+stale pre-reboot connection would sit reporting `ESTABLISHED` forever and never reconnect to the
+VCU's new server.
+
+**RealDash stale-connection watchdog** (`odroid/realdash_watchdog.py`, separate systemd service,
+unrelated to the shutdown sequence above): RealDash has a recurring bug — after the VCU reboots,
+it sometimes ends up with two simultaneous TCP connections to the VCU's port 35000, leaving the
+display frozen on a stale, data-starved connection. The watchdog polls for 2+ `ESTABLISHED`
+connections to the VCU, and if the condition persists across two consecutive 10 s checks (to
+avoid false-triggering on a normal brief handover), kills and relaunches RealDash automatically.
+**Gotcha if editing this script:** `pkill -f <pattern>` substring-matches the full command line —
+the first version of this watchdog killed itself, since its own filename (`realdash_watchdog.py`)
+contains "realdash". The pattern must be anchored (`(^|/)realdash$`) to match only processes
+actually named `realdash`.
+
+Confirmed working end-to-end on hardware, including the relay driver wiring: the relays' LV/logic
+side needs a constant 3.3V supply, not one switched by KL15R upstream — that wiring mistake
+produced a symptom (both relays dropping instantly regardless of firmware timing) that looked
+exactly like a firmware bug but wasn't one.
+
+---
+
 ## CAN Keypad Button Assignment
 
 Blink Marine PKP1600SI, 6 buttons — replaced the earlier 8-button PKP2400SI-family pad (same
@@ -566,6 +625,7 @@ t0 runs at the highest ARM Cortex-M7 NVIC priority (`priority(0)`) and preempts 
 | `sleep.cpp` | `enterSleep()` — STOP-mode sleep sequence (see [KLR region](#klr-region-key-position-1)) |
 | `display.cpp` | `displayStatus()` — RealDash CAN3 update, also mirrors frames to the Ethernet link via `realdash_tcp.cpp` |
 | `realdash_tcp.cpp` | RealDash-over-Ethernet TCP server (`realdashInit`, `realdashService`, `realdashQueueFrame`) — see CAN3 section |
+| `odroid_shutdown.cpp` | Odroid graceful-shutdown TCP signal (`odroidShutdownInit`, `odroidShutdownService`, `odroidShutdownSignal`) — see [12V Relay Power Control](#12v-relay-power-control--odroid-graceful-shutdown) |
 | `sdlog.cpp` | SD card logging (`sdInit`, `sdLogData`, `sdQueueEventISR`, `sdDrainEvents`) |
 | `lin.cpp` | LIN valve I/O (`linInit`, `linReadValve`, `linWriteValve`) |
 | `throttle.cpp` | `readThrottle()` — the throttle pipeline (see [Throttle Pipeline](#throttle-pipeline)) |
@@ -575,6 +635,17 @@ t0 runs at the highest ARM Cortex-M7 NVIC priority (`priority(0)`) and preempts 
 `include/defines.h` holds macros, types, and `extern` declarations for everything shared across these files; each split-out module also gets its own small prototype header (`callbacks.h`, `can_handlers.h`, etc.) included from wherever it's called.
 
 **Gotcha for future splits:** `FlexCAN_T4`'s constructor and `.begin()` both touch file-scope `static` routing pointers with internal linkage — if a `can1`/`can2`/`can3` object is *constructed* in one `.cpp` file but `.begin()` is *called* from another, the real interrupt vector ends up pointing at a trampoline that reads an unset pointer, and the board hangs on first CAN traffic (indistinguishable from a hardware fault). Keep construction and `.begin()`/`.onReceive()`/`.enableFIFOInterrupt()` calls for a given CAN object in the same translation unit — currently `can_handlers.cpp`.
+
+### Odroid-side scripts (`odroid/`)
+
+Not VCU firmware, but deployed alongside it — Python scripts + systemd unit files running on the
+Odroid M2 display, each with paired deploy instructions in the `.service` file's header comment:
+
+| Script | Purpose |
+|--------|---------|
+| `vu12_backlight.py` | RealDash on-screen button → Data Multicast → VU12 backlight brightness over serial |
+| `odroid_shutdown_watcher.py` | Receives the VCU's graceful-shutdown signal — see [12V Relay Power Control](#12v-relay-power-control--odroid-graceful-shutdown) |
+| `realdash_watchdog.py` | Auto-recovers RealDash's recurring stale-connection freeze — see [12V Relay Power Control](#12v-relay-power-control--odroid-graceful-shutdown) |
 
 ---
 
