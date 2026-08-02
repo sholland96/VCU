@@ -23,6 +23,18 @@ static EthernetServer realdashServer(REALDASH_TCP_PORT);
 static EthernetClient realdashClient;
 static bool ethernetUp = false;
 
+// Time of the last write() that actually reported sending data — the real signal for
+// "this client is genuinely alive", since realdashClient.connected() can fail to detect a
+// peer that vanished without a clean FIN/RST (e.g. the Odroid rebooting, which now happens
+// routinely from the relay/shutdown feature) for a long time or indefinitely. A stale
+// timeout here is what actually distinguishes a dead client from a live one — NOT the mere
+// arrival of a new incoming connection: RealDash is confirmed (on hardware, repeatedly) to
+// routinely hold 2-3 simultaneous connections to this port as normal behavior, so treating
+// every new SYN as proof the old client is dead caused constant unnecessary switching away
+// from a perfectly good, actively-used connection (stop/restart data cycling).
+static uint32_t lastGoodWriteMs = 0;
+static const uint32_t CLIENT_STALE_TIMEOUT_MS = 5000; // real cadence is ~62.5ms, 5s is generous
+
 // displayStatus() runs from callback_t1(), a hardware-timer ISR (same category as
 // callback_t2(), where SD-card I/O was already found to be unsafe — see sdLogPending in
 // main.cpp/sdlog.cpp). QNEthernet's TCP stack is likewise not ISR-safe, so frames queued by
@@ -68,25 +80,30 @@ static void realdashSendFrame(uint32_t canId, const uint8_t *payload) {
   packet[6] = (uint8_t)(canId >> 16);
   packet[7] = (uint8_t)(canId >> 24);
   memcpy(packet + 8, payload, 8);
-  realdashClient.write(packet, sizeof(packet));
+  size_t sent = realdashClient.write(packet, sizeof(packet));
+  if (sent == sizeof(packet)) lastGoodWriteMs = millis();
 }
 
 void realdashService() {
   if (!ethernetUp) return;
 
-  // Always accept a fresh incoming connection immediately, regardless of whether the
-  // current client still looks connected — a genuinely new SYN is strong evidence the old
-  // peer is gone. Previously gated on !realdashClient.connected(), which can fail to
-  // detect a peer that vanished without a clean FIN/RST (e.g. the Odroid rebooting, which
-  // now happens routinely from the relay/shutdown feature). Confirmed on hardware: RealDash
-  // stuck repeatedly showing "trying to connect" while the VCU kept holding onto a stale
-  // client from before the Odroid's last reboot, never calling accept() for the new one.
-  // accept() itself is non-blocking either way, so calling it unconditionally is cheap.
+  bool clientStale = !realdashClient || !realdashClient.connected() ||
+                      (millis() - lastGoodWriteMs > CLIENT_STALE_TIMEOUT_MS);
+
   EthernetClient incoming = realdashServer.accept();
   if (incoming) {
-    if (realdashClient) realdashClient.stop();
-    realdashClient = incoming;
-    Serial.println("RealDash: client connected");
+    if (clientStale) {
+      // Current client is dead (or there wasn't one) — take over.
+      if (realdashClient) realdashClient.stop();
+      realdashClient = incoming;
+      lastGoodWriteMs = millis();
+      Serial.println("RealDash: client connected");
+    } else {
+      // Current client is still actively receiving data — RealDash routinely opens extra
+      // simultaneous connections as normal behavior, not just when something's broken, so
+      // a new SYN alone isn't reason enough to drop a working connection. Politely refuse.
+      incoming.stop();
+    }
   }
 
   // Drain whatever displayStatus() queued since the last loop() pass (main context only —
