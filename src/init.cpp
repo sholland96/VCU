@@ -12,6 +12,7 @@
 #include "callbacks.h"
 #include "realdash_tcp.h"
 #include "odroid_shutdown.h"
+#include "note_alerts.h"
 
 using namespace TeensyTimerTool;
 
@@ -165,6 +166,7 @@ void setup() {
   if (!extWakePending) {
     realdashInit();
     odroidShutdownInit(); // separate TCP port on the same Ethernet interface — see odroid_shutdown.h
+    notecardInit(); // Blues Notecard (I2C) alert notifications — see notecard.h
   }
 
   pinMode(RELAY_PDU_PIN, OUTPUT);

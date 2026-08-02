@@ -7,6 +7,7 @@
 #include "sdlog.h"
 #include "sleep.h"
 #include "fsm_states.h"
+#include "note_alerts.h"
 
 void Off_enter()
 {
@@ -32,19 +33,9 @@ void Idle_enter()
   VCUstate = VCU_STATE_IDLE;
   sdLogEvent("STATE:IDLE");
   
-  /* Send SMS
-  0 = send "KL15R on" message
-  1 = send "KL15C on" message
-  2 = send "Pre-charge failed..." message
-  3 = send "Something happened..." message
-  4 = send "Charging stopped..." message
-  5 = send "Temperature warning..." message
-  any other value  = send "Invalid request..." message
-  */
-  msg3.id = 0xC79;//send SMS
-  msg3.len = 1;
-  msg3.buf[0] = 0;//send "KL15R on" message
-  can3.write(msg3);
+  // Alert notification — see notecard.h. Supersedes the old CAN3-gateway 0xC79 SMS command
+  // (see README's CAN3 section for the gateway this replaces).
+  notecardSendAlert(0); // "KL15R on"
 
   //PDUmsg2.buf[3] = 0xFE;//HS driver 3 PWM set to 99%- positive pre-charge
   //PDUmsg1.buf[3] = 5;//HS driver 3 current limit 2A (2/0.4A = 5) - positive pre-charge
@@ -62,19 +53,11 @@ void Idle_enter()
     msg2.buf[7] = 0xFF;
     can2.write(msg2);
 
-    /* Send SMS
-    0 = send "KL15R on" message
-    1 = send "KL15C on" message
-    2 = send "Pre-charge failed..." message
-    3 = send "Something happened..." message
-    4 = send "Charging stopped..." message
-    5 = send "Temperature warning..." message
-    any other value  = send "Invalid request..." message
-    */
-    msg3.id = 0xC79;//send SMS
-    msg3.len = 1;
-    msg3.buf[0] = 2;//send "Pre-charge failed..." message
-    can3.write(msg3);
+    // Alert notification — code 2 ("Pre-charge failed") fires unconditionally on every Idle
+    // entry, which only happens after a *successful* pre-charge — pre-existing behavior
+    // (also true of the CAN3 SMS mechanism this replaces), not introduced here. See
+    // HANDOFF.md's SMS code table inconsistency note; left as-is, not in scope right now.
+    notecardSendAlert(2); // "Pre-charge failed"
 
   // read IVT-MOD pack voltage U2, compare to pack voltage U1, if U2 < 95% of U1 after 2 seconds:
   // - send error message to keypad
@@ -269,10 +252,7 @@ void Fault_enter() {
   msg2.buf[6] = 0x00;
   msg2.buf[7] = 0xFF;
   can2.write(msg2);
-  msg3.id = 0xC79;
-  msg3.len = 1;
-  msg3.buf[0] = 3; // "Something happened..."
-  can3.write(msg3);
+  notecardSendAlert(3); // "Something happened"
 }
 
 void Fault_exit() {
