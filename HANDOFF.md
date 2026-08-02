@@ -46,6 +46,29 @@ operating power immediately regardless of what the GPIOs commanded — same symp
 dropping instantly) as a firmware bug would produce, but the root cause was entirely in the
 driver supply wiring, not the code. Fixed by keeping that 3.3V rail on constant power.
 
+**A second KL15R debounce gap surfaced after the relay hardware was wired**: relay-driver
+switching noise on the KL15R sense line (most plausibly from `RELAY_ODROID_PIN`'s own coil
+de-energizing) could read as a brief spurious high and immediately re-trigger `digitalWrite(HIGH)`
+with no debounce on that direction — symptom: Odroid display goes dark then immediately restarts.
+Fixed with `klrStableHigh`, a mirror of the existing `klrStableLow` (same 500ms margin), required
+before either relay's "turn on" condition — not just the "turn off" side.
+
+**Then a separate, Odroid-side issue with the same visible symptom (RealDash restarting during
+shutdown), root-caused via live monitoring** (polling uptime/PID/connections every second through
+an actual shutdown, timestamped): `nodm.service` is an auto-login X session manager whose entire
+job is to respawn the X session if it exits, and `/home/ek9/.xsession.new` is literally
+`exec /usr/bin/realdash` with no wrapper — so killing RealDash kills the whole X session, which
+`nodm` dutifully restarts (`NODM_MIN_SESSION_TIME` in `/etc/default/nodm` documents this exact
+behavior). No amount of killing RealDash itself could ever fix this; `trigger_shutdown()` in
+`odroid_shutdown_watcher.py` now stops `nodm.service` first (removing the supervisor, not just
+the supervised app), with a `pkill -f realdash` kept as a fast belt-and-suspenders. Confirmed
+clean on hardware: `nodm` stops, RealDash exits and stays gone, no restart, clean shutdown.
+
+**Still open:** whether the 15s `ODROID_SHUTDOWN_DELAY_MS` margin is actually sufficient wasn't
+cleanly measurable until the restart-loop bugs above were fixed (a flickering relay/respawning
+app made it impossible to tell "shutdown completed in time" from "shutdown never really
+finished"). Worth a fresh timing check now that both are resolved.
+
 ## Sleep/wake reliability — root causes found and fixed on hardware
 
 Started from a report that Teensy standby current had risen from ~4 mA to ~23 mA once the
