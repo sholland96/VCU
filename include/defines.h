@@ -99,11 +99,17 @@ extern TeensyTimerTool::PeriodicTimer t1, t2, t3;
 
 #define KL15R_PIN 2  // physical key position 1 (accessory) — wakes hardware, no FSM role
 
-// SNVS_LPGPR0 (battery-backed low-power general-purpose register) carries the wake-cause
+// SNVS_LPGPR (battery-backed low-power general-purpose register) carries the wake-cause
 // flag across enterSleep()'s AIRCR reset. Used in enterSleep() and setup() to detect
 // CAN-wake vs key-on. Plain DMAMEM/OCRAM was tried first but did not reliably retain its
 // value through this STOP-mode config (confirmed on hardware — same wake path, same
-// garbage readback, regardless of wake source); SNVS_LPGPR0 is purpose-built for this.
+// garbage readback, regardless of wake source); SNVS_LPGPR is purpose-built for this.
+// NOTE: this is the single legacy SNVS_LPGPR register at offset 0x068, not the SNVS_LPGPR0
+// (offset 0x100) name also defined in imxrt.h — that one is part of a 4-word GPR bank real
+// on some i.MX siblings but was confirmed on hardware to be unimplemented (reads/writes as
+// 0 always, even same-core immediate readback) on this Teensy 4.1's IMXRT1062. The original
+// implementation used SNVS_LPGPR0 by mistake and appeared to work only because a normal
+// key-on wake happens to want to write 0 anyway — indistinguishable from total failure.
 #define SLEEP_MAGIC_CAN_WAKE 0xC4A8B3E1UL
 
 #define KEYPAD_COLOR_OFF          0
@@ -427,14 +433,27 @@ extern uint8_t  battPumpSetpoint;
 #define EVCC_AC_CTRL        0x601u    // AC_Control: Ready_To_Deliver_Power(b0) — received from EVCC
 #define EVCC_AC_STATUS      0x611u    // AC_Status: Ready_To_Charge(b0) — sent by VCU every 62.5ms
 //
-// Plug_and_pins values (New_Charge_Session 0x68001 byte 1, old extended-ID protocol)
+// Plug_and_pins values (New_Charge_Session 0x68001 byte 1) — confirmed against
+// dbc/Advantics_Generic_EVSE_protocol_v2.7.dbc's VAL_ table (the v2 DBC previously in this
+// repo only documented 0/1/2 and had no AC value at all; 3 and 4 are new in v2.7).
 #define EVCC_PLUG_CCS_DC_CORE  0u  // CCS DC Core (DIN 70121 / ISO 15118 basic)
 #define EVCC_PLUG_CCS_DC_EXT   1u  // CCS DC Extended
 #define EVCC_PLUG_CHADEMO      2u  // CHAdeMO
-// True for all defined DC plug types; any other value is treated as AC.
+#define EVCC_PLUG_CCS_AC       3u  // CCS AC
+#define EVCC_PLUG_MCS          4u  // Megawatt Charging System — DC, NOT AC despite being outside
+                                    // the old 0/1/2 DC list; the previous "anything not a known
+                                    // DC value is AC" fallback would have misclassified this and
+                                    // had the VCU try to actively manage contactors for a
+                                    // protocol that, like CCS-DC/CHAdeMO, the EVCC handles
+                                    // autonomously.
+// True for all defined DC plug types; explicit CCS_AC is the only AC value. Deliberately not
+// "anything not in the DC list" anymore — an unrecognized future value now defaults to the DC
+// (VCU stays passive, EVCC handles it) side rather than AC (VCU actively closes contactors),
+// which is the safer failure mode for a plug type this code doesn't actually understand yet.
 #define EVCC_PLUG_IS_DC(p) ((p) == EVCC_PLUG_CCS_DC_CORE || \
                             (p) == EVCC_PLUG_CCS_DC_EXT  || \
-                            (p) == EVCC_PLUG_CHADEMO)
+                            (p) == EVCC_PLUG_CHADEMO     || \
+                            (p) == EVCC_PLUG_MCS)
 //
 // Pins values (EVSE_Information 0x600 byte 1, v2.5 standard-ID protocol)
 #define EVCC_PINS_CCS_AC       1u   // AC (generic)

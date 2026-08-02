@@ -64,13 +64,13 @@ void enterSleep() {
                  CCM_CCGR0_CAN2(3) | CCM_CCGR0_CAN2_SERIAL(3));
   CCM_CCGR7 &= ~(CCM_CCGR7_CAN3(3) | CCM_CCGR7_CAN3_SERIAL(3));
 
-  // CAN2 (EVCC) and CAN3 (wireless gateway) wake sources temporarily disabled: neither has
-  // anything connected right now, and an unterminated/floating CAN bus can pick up noise
-  // that the MCP2562 transceiver's RXD output relays as spurious dominant edges, firing
-  // the wake interrupt with no real traffic involved (confirmed on hardware with CAN3).
-  // Re-enable per-bus once each device is back in service: pinMode(..., INPUT_PULLUP) on
-  // the RX pin (CAN clock is already gated above) plus attachInterrupt(..., FALLING) in
-  // the wake-arming block below.
+  // CAN2 wake re-enabled below for bench testing with a Kvaser dongle driving real, properly
+  // terminated bus traffic. CAN3 (wireless gateway) stays disabled: nothing is connected to it
+  // right now, and an unterminated/floating CAN bus was confirmed on hardware to pick up noise
+  // that the MCP2562 transceiver's RXD output relays as spurious dominant edges, firing the
+  // wake interrupt with no real traffic involved. Re-enable the same way once the gateway is
+  // back in service: pinMode(..., INPUT_PULLUP) on CAN3_RX_PIN (CAN clock is already gated
+  // above) plus attachInterrupt(..., FALLING) in the wake-arming block below.
 
   // 2. Drop CPU to ARM PLL minimum (~16.2 MHz, 0.95 V DCDC).
   set_arm_clock(16000000);
@@ -93,8 +93,13 @@ void enterSleep() {
   //    If KL15R is already high when WFI executes, the pending interrupt returns it
   //    immediately — no race condition.
   attachInterrupt(digitalPinToInterrupt(KL15R_PIN),  [](){}, RISING);   // key-on
-  // CAN2/CAN3 wake sources temporarily disabled — see note above. KL15R is the sole
-  // wake source until EVCC/gateway are back in service.
+  // CAN2 RXD: MCP2562 in standby still drives this low on dominant bus edges, independent of
+  // the (clock-gated) CAN2 controller — see CAN2_RX_PIN in defines.h. Must be reconfigured as
+  // a plain GPIO input here since FlexCAN_T4's begin() owns this pin's IOMUX the rest of the
+  // time; initCAN() puts it back to CAN2 RX alternate function on the next boot.
+  pinMode(CAN2_RX_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(CAN2_RX_PIN), [](){}, FALLING); // EVCC/CAN2 activity
+  // CAN3 wake source still temporarily disabled — see note above.
   SYST_CSR &= ~1u;  // disable SysTick (bit 0 = ENABLE) — stops 1 ms wakeups
 
   // STOP mode — gates more internal domains than WAIT mode.
@@ -111,10 +116,12 @@ void enterSleep() {
 
   asm volatile("dsb");
 
-  // Set SNVS_LPGPR0 based on wake cause. KL15R HIGH = key was turned → normal boot;
-  // KL15R still LOW here would mean a non-KL15R wake source (CAN2/CAN3), currently
-  // disabled — kept as a CAN-wake flag for when they're re-enabled.
-  SNVS_LPGPR0 = digitalRead(KL15R_PIN) ? 0 : SLEEP_MAGIC_CAN_WAKE;
+  // Set SNVS_LPGPR based on wake cause. KL15R HIGH = key was turned → normal boot;
+  // KL15R still LOW here would mean a non-KL15R wake source (CAN2, and CAN3 once
+  // re-enabled). See defines.h for why this is SNVS_LPGPR (offset 0x068), not the
+  // similarly-named but unimplemented-on-this-chip SNVS_LPGPR0 (offset 0x100).
+  bool klrHighAtWake = digitalRead(KL15R_PIN);
+  SNVS_LPGPR = klrHighAtWake ? 0 : SLEEP_MAGIC_CAN_WAKE;
 
 #ifdef UBLOX_GNSS
   // Only if GNSS was actually brought up this boot — nothing to wake otherwise, and the

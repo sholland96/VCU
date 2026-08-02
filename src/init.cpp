@@ -53,17 +53,26 @@ void setup() {
 
   pinMode(KL15R_PIN, INPUT_PULLDOWN); // KL15R key position 1 — LOW = key off → sleep
 
-  // Detect CAN-wake boot: SNVS_LPGPR0 is set in enterSleep() based on wake source.
+  // SNVS is a security peripheral, and by default it actively zeroizes its general-purpose
+  // register (normally meant for key material, not scratch flags) — confirmed on hardware via
+  // a same-boot write/readback test that SNVS_LPGPR could not hold any value at all, even
+  // within a single power cycle with no reset involved, until this bit was set. Must run every
+  // boot, before enterSleep() ever writes SNVS_LPGPR for the CAN-wake flag below.
+  SNVS_LPCR |= SNVS_LPCR_GPR_Z_DIS;
+
+  // Detect CAN-wake boot: SNVS_LPGPR is set in enterSleep() based on wake source.
   // SLEEP_MAGIC_CAN_WAKE + KL15R LOW = CAN2/CAN3 woke the VCU → enter KL15C standby.
-  Serial.printf("SNVS_LPGPR0=0x%08lX (expect 0x%08lX for CAN wake) KL15R=%d\n",
-                SNVS_LPGPR0, (uint32_t)SLEEP_MAGIC_CAN_WAKE, digitalRead(KL15R_PIN));
-  if (SNVS_LPGPR0 == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN)) {
+  // See defines.h: this used to be SNVS_LPGPR0, which turned out to be an unimplemented
+  // register on this chip (always reads/writes 0) — switched to the real SNVS_LPGPR.
+  Serial.printf("SNVS_LPGPR=0x%08lX (expect 0x%08lX for CAN wake) KL15R=%d\n",
+                SNVS_LPGPR, (uint32_t)SLEEP_MAGIC_CAN_WAKE, digitalRead(KL15R_PIN));
+  if (SNVS_LPGPR == SLEEP_MAGIC_CAN_WAKE && !digitalRead(KL15R_PIN)) {
     extWakePending = true;
     Serial.println("Boot cause: CAN wake (EVCC or wireless gateway) — entering KL15C");
   } else {
     Serial.println("Boot cause: key-on or cold boot");
   }
-  SNVS_LPGPR0 = 0; // clear so a cold-boot after this point does not misfire
+  SNVS_LPGPR = 0; // clear so a cold-boot after this point does not misfire
 
   pinMode(CAN_STBY_PIN, OUTPUT);
   digitalWrite(CAN_STBY_PIN, LOW);    // transceivers active; driven HIGH in enterSleep()
@@ -113,16 +122,6 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
 
 #ifdef UBLOX_GNSS
-  // NEO-M8U doesn't reliably bring up its I2C/UART interface from power-on alone (confirmed
-  // on two separate M8U units) — an active reset pulse is required. V_BKCP is battery-backed
-  // (coin cell) independently of this pin, so this doesn't clear ephemeris/RTC backup data;
-  // safe to do unconditionally on every boot, not just true cold power-on.
-  pinMode(GNSS_RESET_PIN, OUTPUT);
-  digitalWrite(GNSS_RESET_PIN, LOW);
-  delay(10);
-  digitalWrite(GNSS_RESET_PIN, HIGH);
-  delay(10);
-
   Wire.setClock(400 * 1000);//for U-blox GPS
   Wire.begin();
   Wire.setTimeout(50);             // 50ms — backup-wake I2C responses are slower
@@ -130,6 +129,27 @@ void setup() {
   // Skip GNSS bring-up entirely on a CAN-triggered wake (EVCC/gateway) — GNSS isn't needed
   // to answer a pMBB32 status query, and blocking here has nothing to do with GPS.
   if (!extWakePending) {
+    // NEO-M8U doesn't reliably bring up its I2C/UART interface from power-on alone (confirmed
+    // on two separate M8U units) — an active reset pulse is required. V_BKCP is battery-backed
+    // (coin cell) independently of this pin, so this doesn't clear ephemeris/RTC backup data;
+    // safe to do unconditionally on every boot that's actually going to manage GNSS power.
+    //
+    // Deliberately NOT pulsed on a CAN-wake boot (extWakePending): confirmed on hardware that
+    // resetting the module here wakes it from whatever backup/low-power state a previous
+    // enterSleep() left it in, and since this path never calls myGNSS.begin() below,
+    // gnssInitialized stays false and nothing ever puts it back to sleep — it just sits there
+    // actively running (and drawing current) for the rest of this cycle and straight through
+    // the next enterSleep(), since that function's GNSS backup-mode code is also gated behind
+    // gnssInitialized. Measured as a real ~10 mA sleep-current regression (23 mA baseline vs.
+    // ~33 mA after a KL15C session ending via CAN wake). Leaving an already-sleeping module
+    // undisturbed avoids the problem entirely; the next real key-on boot resets and
+    // re-initializes it normally regardless.
+    pinMode(GNSS_RESET_PIN, OUTPUT);
+    digitalWrite(GNSS_RESET_PIN, LOW);
+    delay(10);
+    digitalWrite(GNSS_RESET_PIN, HIGH);
+    delay(10);
+
     // GNSS was woken via EXTINT rising edge in enterSleep() before AIRCR reset;
     // it hot-starts during Teensy setup().  Wait for I2C to respond, but bounded — this
     // loop used to be uncapped and would hang all of setup() forever (blocking the entire
@@ -160,13 +180,22 @@ void setup() {
   }
 #endif
 
-  // RealDash-over-Ethernet dashboard feed — skipped on a CAN-triggered wake for the same
-  // reason as GNSS above: not needed to answer a pMBB32 status query, and no gateway retry
-  // timeout can help if bring-up here ever stalls the fast-response path.
+  // RealDash-over-Ethernet dashboard feed + Odroid shutdown signal server. Unlike GNSS above,
+  // these are NOT skipped on a CAN-triggered wake: realdashInit()'s own Ethernet.begin() only
+  // configures the interface (no DHCP wait, confirmed non-blocking — see its comment), and
+  // odroidShutdownInit() is just a second EthernetServer::begin() on the same interface. Both
+  // need to be running even on a CAN2 wake into KL15C (e.g. a DC charge session starting with
+  // the key out) so that turning KL15R on later — to power up the Odroid display and check
+  // status mid-charge, without disturbing the EVCC-driven charge session already in progress —
+  // has a TCP server actually listening for it to connect to. RELAY_PDU_PIN/RELAY_ODROID_PIN
+  // below already power up/down purely off KL15R debounce state, independent of VCU FSM state,
+  // so no further gating is needed here for that to work.
+  realdashInit();
+  odroidShutdownInit(); // separate TCP port on the same Ethernet interface — see odroid_shutdown.h
   if (!extWakePending) {
-    realdashInit();
-    odroidShutdownInit(); // separate TCP port on the same Ethernet interface — see odroid_shutdown.h
-    notecardInit(); // Blues Notecard (I2C) alert notifications — see notecard.h
+    // Notecard init does a blocking I2C hub.set request/response round trip, unlike the two
+    // above — kept on the slow/full-init path only, same as before.
+    notecardInit(); // Blues Notecard (I2C) alert notifications — see note_alerts.h
   }
 
   pinMode(RELAY_PDU_PIN, OUTPUT);

@@ -331,8 +331,24 @@ All confirmed fixed on real hardware except where noted:
   (`DMAMEM volatile uint32_t sleepMagic`) came back as a consistent garbage value after a real
   STOP-mode sleep cycle, reproducible on both CAN-wake and plain KL15R wake — not random noise,
   not CAN-specific. Believed cause: this project's STOP-mode config (CPU at ~3 MHz, DCDC core at
-  0.95 V) is below OCRAM's safe retention threshold. **Fixed** by switching to `SNVS_LPGPR0`, a
+  0.95 V) is below OCRAM's safe retention threshold. **Fixed** by switching to `SNVS_LPGPR`, a
   battery-backed SNVS register built for exactly this. See `feedback_teensy41_noinit` memory.
+  (This first pass used the wrong SNVS register name, `SNVS_LPGPR0` — see the entry below.)
+- **Wake-cause detection (`SNVS_LPGPR0`/`extWakePending`) intermittently wrong — root-caused and
+  fixed.** `imxrt.h` defines two different SNVS general-purpose registers: the legacy single word
+  `SNVS_LPGPR` (offset `0x068`) and a 4-word bank `SNVS_LPGPR0`-`SNVS_LPGPR3` (offset
+  `0x100`-`0x10C`) real on some i.MX siblings. The code had been using `SNVS_LPGPR0` the whole
+  time. Confirmed on hardware via a same-boot write/readback test (no sleep/reset involved at
+  all) that this register could never hold any value — ruling out the reset path entirely.
+  Switching the address to `SNVS_LPGPR` alone made no difference either. Root cause: SNVS is a
+  security peripheral and by default actively zeroizes its general-purpose register (normally
+  meant for key material, not scratch flags) — confirmed via `SNVS_LPCR`, where `GPR_Z_DIS` (bit
+  24) was clear. Setting `SNVS_LPCR |= SNVS_LPCR_GPR_Z_DIS` once per boot, before `SNVS_LPGPR` is
+  ever touched, fixed it — confirmed surviving a real sleep → CAN2-wake → AIRCR-reset cycle on
+  hardware (`SNVS_LPGPR` read back `0xC4A8B3E1` and the boot correctly landed in `KL15C`). This
+  had been silently broken since the mechanism was first written; it only ever "worked" for a
+  normal key-on wake because that path always wants to write 0 anyway, which is indistinguishable
+  from the register failing to hold anything at all.
 - **Stale/zero pMBB32 data in the `0xC85` response** — every wake is a full reset, so
   `highestCellV`/`lowestCellV` start zero-initialized until the modules answer a `0xFF0000`
   trigger. Fixed: `callback_t2()` now holds the response until `highestCellV > 0`.
@@ -349,23 +365,6 @@ All confirmed fixed on real hardware except where noted:
 
 ## Still open / not fixed
 
-- **Wake-cause detection (`SNVS_LPGPR0`/`extWakePending`) intermittently wrong.** Currently moot
-  in practice — CAN2/CAN3 wake sources are disabled (see "Sleep/wake reliability" above), so this
-  path isn't exercised until they're re-enabled. Even with
-  `KL15R` confirmed low via a fresh debug print, `SNVS_LPGPR0` sometimes reads back `0` (normal
-  boot) instead of the CAN-wake magic value — meaning it lands in `Off` instead of `KL15C`.
-  Consistently reads back as a *clean* `0`, not garbage (ruling out the old DMAMEM-style
-  corruption), which suggests `digitalRead(KL15R_PIN)` itself is reading HIGH at the exact point
-  `enterSleep()` decides the value — cause unknown. **A debounce fix around that read (sampling
-  `KL15R_PIN` twice via the DWT cycle counter) was attempted and reverted** — it caused the board
-  to stop waking entirely (most likely a `while (ARM_DWT_CYCCNT - ...)` loop that never
-  terminated, since it's unconfirmed whether the DWT counter is reliably running immediately
-  after a STOP-mode `wfi` returns, at that point in the function). **Do not re-attempt a busy-wait
-  fix here without a safer verification method** — this cost a real hang on physical hardware.
-  Functionally this is now a performance-only issue, not a correctness one: the flag-based fixes
-  above (`gatewayStatusRequestPending`/`gatewayResponseSent`) make the feature work correctly
-  regardless of which state it lands in, just slower via `Off` (full GNSS/ADS1115 reinit) than it
-  would be via `KL15C`.
 - **Broader FSM state naming** — user described wanting `KL15R` (key position 1) to map to its
   own distinct state (BMS enabled, display updated), separate from the current `Idle` (which
   currently means "post-pre-charge, ready for Drive"). Not implemented — only the `KL30C`→`KL15C`
