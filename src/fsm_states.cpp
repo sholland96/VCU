@@ -257,6 +257,21 @@ void Fault_enter() {
 
 void Fault_exit() {
   Serial.println("Exiting Fault state");
+  // Fault_enter() sets the Start/Stop key to red blink but nothing ever turned it back off —
+  // the VCU state already returns to Off via check_Fault()'s existing Park/Start-Stop
+  // handling, but the keypad LED was left blinking red regardless.
+  msg2.id             = 0x18EF2100;
+  msg2.flags.extended = 1;
+  msg2.len            = 8;
+  msg2.buf[0]         = 0x04;
+  msg2.buf[1]         = 0x1B;
+  msg2.buf[2]         = KEYPAD_CMD_SET_LED;
+  msg2.buf[3]         = KEYPAD_KEY_START_STOP;
+  msg2.buf[4]         = KEYPAD_COLOR_OFF;
+  msg2.buf[5]         = KEYPAD_MODE_SOLID;
+  msg2.buf[6]         = 0x00;
+  msg2.buf[7]         = 0xFF;
+  can2.write(msg2);
 }
 
 void check_Fault() {
