@@ -61,6 +61,14 @@ void notecardCheckStatus() {
                 JGetBool(rsp, "connected") ? "yes" : "no",
                 JGetString(rsp, "status"));
   notecard.deleteResponse(rsp);
+
+  // card.wireless shows which SIM is actually selected (built-in eSIM vs an installed
+  // external SIM) and signal/registration detail — more specific than hub.status alone.
+  // Field names vary more than hub.status's, so rely on the full raw JSON already printed
+  // via the debug stream rather than guessing at a brittle summary here.
+  Serial.println("Notecard card.wireless:");
+  J *wrsp = notecard.requestAndResponse(notecard.newRequest("card.wireless"));
+  if (wrsp) notecard.deleteResponse(wrsp);
 }
 
 void notecardSendAlert(uint8_t code) {
