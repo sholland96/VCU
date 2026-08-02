@@ -205,6 +205,15 @@ extern Adafruit_ADS1115 ads;
 // margin above that observed floor rather than cutting it exactly at the measured point.
 #define ODROID_SHUTDOWN_DELAY_MS  10000UL
 
+// Hard ceiling on the whole Odroid shutdown sequence, measured from when KL15R first went
+// low (klrLowSince). If the Odroid is off, unreachable, or its watcher service isn't
+// running, odroidShutdownSignal() can never succeed and RELAY_ODROID_PIN would otherwise
+// never go LOW — which would block enterSleep() forever, since it waits on that relay.
+// The VCU's own ability to sleep must never be permanently hostage to a peripheral being
+// unavailable: past this point, give up trying to signal gracefully and cut the relay
+// anyway so the VCU can still sleep.
+#define ODROID_SHUTDOWN_MAX_WAIT_MS  30000UL
+
 extern bool     odroidShutdownSignaled;    // true once the TCP signal is confirmed delivered this cycle
 extern uint32_t odroidShutdownSignalTime;  // millis() when it was confirmed delivered
 extern uint32_t odroidShutdownLastAttempt; // millis() of the last delivery attempt — retry-rate limit

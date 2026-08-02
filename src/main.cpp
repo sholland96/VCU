@@ -172,7 +172,15 @@ void loop() {
       digitalWrite(RELAY_ODROID_PIN, HIGH);
       odroidShutdownSignaled = false;
     } else if (klrStableLow && digitalRead(RELAY_ODROID_PIN)) {
-      if (!odroidShutdownSignaled) {
+      // Hard ceiling on the whole sequence (measured from klrLowSince, when KL15R first
+      // went low) — if the Odroid is off/unreachable, odroidShutdownSignal() can never
+      // succeed, and without this the relay (and therefore enterSleep(), which waits on
+      // it) would never fire at all. Confirmed on hardware: the VCU stayed fully awake
+      // indefinitely with no fallback. The VCU's own ability to sleep must never be
+      // permanently hostage to a peripheral being unavailable.
+      if (millis() - klrLowSince >= ODROID_SHUTDOWN_MAX_WAIT_MS) {
+        digitalWrite(RELAY_ODROID_PIN, LOW);
+      } else if (!odroidShutdownSignaled) {
         // Retry at most once/second until actually delivered (a connected client at the
         // moment of the call) — a single one-shot attempt could silently miss if the
         // Odroid-side watcher's TCP connection happens to be mid-reconnect right then.

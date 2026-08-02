@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """
-Watches for RealDash's recurring stale-duplicate-connection bug and recovers from it
-automatically. Recurring pattern seen throughout this project (see HANDOFF.md): after the
-VCU (Teensy) reboots — which happens on every sleep/wake cycle, not just a fresh flash —
-RealDash sometimes ends up with two simultaneous ESTABLISHED TCP connections to the VCU's
-port 35000 (realdash_tcp.cpp, single-client server: "a new connection replaces the old
-one" at the VCU's application layer, but the raw TCP handshake for a second connection
-still completes at the stack level before the VCU's code ever calls accept() on it, since
-it only does so once it thinks its current client has disconnected). RealDash's own
-process appears to switch its display to the new, data-starved connection while the VCU
-keeps feeding the old, orphaned one — net effect: gauges freeze.
+Watches for RealDash's recurring stale-connection bug and recovers from it automatically.
+Recurring pattern seen throughout this project (see HANDOFF.md): after the VCU (Teensy)
+reboots — which happens on every sleep/wake cycle, not just a fresh flash — RealDash
+sometimes ends up feeding its display from a stale TCP connection to the VCU's port 35000
+(realdash_tcp.cpp) while the VCU has moved on. Net effect: gauges freeze.
 
-This has needed the same manual fix every time: kill both RealDash processes, relaunch.
-This script automates exactly that recipe once it detects the duplicate-connection
-pattern, requiring it to persist across two consecutive checks (not just a single
-snapshot) so a normal, brief connection handover during a fresh RealDash launch doesn't
-trigger an unnecessary kill.
+Detection is based on data freshness (ss -tni's lastrcv, ms since data last arrived on a
+connection), NOT connection count. An earlier version of this script counted ESTABLISHED
+connections and flagged >1 as broken — wrong: RealDash routinely holds 2-3 simultaneous
+connections to the VCU during completely normal operation (confirmed via many snapshots
+taken during known-healthy periods elsewhere in this project's history), so that triggered
+false-positive restarts constantly, even while data was flowing fine. The signal that
+actually matters is whether *any* connection has received data recently — how many
+connections exist alongside it doesn't matter.
+
+This has needed the same manual fix every time it's genuinely broken: kill both RealDash
+processes, relaunch. This script automates exactly that recipe once the freshest
+connection's lastrcv exceeds STALE_THRESHOLD_MS, requiring it to persist across two
+consecutive checks (not just a single snapshot) for extra margin against a momentary blip.
+Zero connections at all is deliberately NOT treated as stale — that's most likely just
+nothing to connect to (e.g. the VCU is asleep), not a RealDash bug.
 
 Deployed on the Odroid M2 as a systemd service — see realdash-watchdog.service in this
 same directory. Runs as root (same as RealDash itself) since the recovery needs to signal
 a root-owned X11 application.
 """
+import re
 import subprocess
 import sys
 import time
@@ -29,22 +35,27 @@ VCU_HOST = "192.168.10.10"  # Teensy static IP (see realdash_tcp.cpp)
 VCU_PORT = 35000
 
 CHECK_INTERVAL_S = 10
+STALE_THRESHOLD_MS = 5000  # VCU sends RealDash frames every 62.5ms normally — 5s is generous
 RESTART_LOG = "/root/realdash_restart.log"
 
+LASTRCV_RE = re.compile(r"lastrcv:(\d+)")
 
-def established_connection_count():
-    """Count ESTABLISHED TCP connections to the VCU's RealDash port."""
+
+def freshest_lastrcv_ms():
+    """Return the smallest (freshest) lastrcv in ms across all connections to the VCU's
+    RealDash port, or None if there are no connections at all."""
     try:
-        out = subprocess.run(["ss", "-tn", "dst", f"{VCU_HOST}:{VCU_PORT}"],
+        out = subprocess.run(["ss", "-tni", "dst", f"{VCU_HOST}:{VCU_PORT}"],
                               capture_output=True, text=True, timeout=5).stdout
     except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"ss failed ({e}), assuming 0 connections this check", file=sys.stderr)
-        return 0
-    return sum(1 for line in out.splitlines() if line.startswith("ESTAB"))
+        print(f"ss failed ({e}), treating as no connections this check", file=sys.stderr)
+        return None
+    values = [int(m) for m in LASTRCV_RE.findall(out)]
+    return min(values) if values else None
 
 
 def recover():
-    print("Duplicate RealDash connection detected (persisted across two checks) — "
+    print("Stale RealDash connection detected (persisted across two checks) — "
           "killing and relaunching RealDash")
     # NOT "-f realdash" — that's a substring match against the full command line, and this
     # script's own filename (realdash_watchdog.py) contains "realdash", so it killed itself
@@ -64,19 +75,19 @@ def recover():
 
 
 def main():
-    duplicate_streak = 0
+    stale_streak = 0
     while True:
-        count = established_connection_count()
-        if count > 1:
-            duplicate_streak += 1
-            print(f"Saw {count} connections to {VCU_HOST}:{VCU_PORT} "
-                  f"(streak={duplicate_streak})")
-            if duplicate_streak >= 2:
+        lastrcv = freshest_lastrcv_ms()
+        if lastrcv is not None and lastrcv > STALE_THRESHOLD_MS:
+            stale_streak += 1
+            print(f"Freshest connection to {VCU_HOST}:{VCU_PORT} last received data "
+                  f"{lastrcv}ms ago (streak={stale_streak})")
+            if stale_streak >= 2:
                 recover()
-                duplicate_streak = 0
+                stale_streak = 0
                 time.sleep(5)  # give the relaunch a moment before resuming checks
         else:
-            duplicate_streak = 0
+            stale_streak = 0
         time.sleep(CHECK_INTERVAL_S)
 
 
