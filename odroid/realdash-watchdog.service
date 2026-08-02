@@ -1,0 +1,23 @@
+# Automatic recovery for RealDash's recurring stale-duplicate-connection bug (gauges freeze)
+#
+# Install on the Odroid M2:
+#   sudo cp realdash-watchdog.service /etc/systemd/system/
+#   sudo cp realdash_watchdog.py /home/ek9/realdash_watchdog.py
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now realdash-watchdog.service
+#
+# Runs as root (same as RealDash itself) — the recovery kills/relaunches a root-owned X11
+# app, which needs matching privileges. See realdash_watchdog.py for the detection logic.
+
+[Unit]
+Description=RealDash stale-connection watchdog (auto kill+relaunch on duplicate VCU connections)
+After=multi-user.target network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /home/ek9/realdash_watchdog.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
