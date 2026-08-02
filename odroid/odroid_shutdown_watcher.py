@@ -31,6 +31,15 @@ RECONNECT_DELAY_S = 3
 
 def trigger_shutdown():
     print("Shutdown signal received from VCU — shutting down now")
+    # Kill RealDash explicitly before triggering the OS shutdown. RealDash isn't run under
+    # a systemd service (its processes show ppid=1 — whatever launched it at boot already
+    # exited), so during a normal shutdown it's at the mercy of teardown ordering; observed
+    # on hardware: the app visibly stops and restarts once before finally staying down,
+    # consistent with something racing to relaunch it while the shutdown sequence is also
+    # trying to kill it. Killing it ourselves first, before shutdown starts, removes that
+    # race entirely rather than relying on the normal teardown order to sort it out.
+    subprocess.run(["sudo", "pkill", "-f", "realdash"], check=False)
+    time.sleep(1)
     subprocess.run(["sudo", "shutdown", "-h", "now"], check=False)
 
 
