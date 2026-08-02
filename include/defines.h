@@ -478,6 +478,15 @@ extern uint16_t throttle;  // 0–100 %, written by readThrottle(), consumed by 
 #define THROTTLE_FAULT_LIMIT    20    // max throttle % permitted when IVT or SIM fault active
 #define BRAKE_THRESHOLD         1600  // ADS1115 counts — TODO: bench calibrate
 #define PRECHARGE_TIMEOUT_MS    2000  // pre-charge relay must raise U2 to ≥95% of U1 within this window
+// Minimum IVT-S pack voltage (U1) considered a real, connected reading rather than a
+// floating/disconnected sense input. Confirmed on hardware: with no HV pack connected and
+// both U1/U2 floating, the 95%-ratio check in check_PreCharge() was satisfied almost
+// instantly — floating high-impedance inputs can read proportionally similar low stray
+// values, passing the ratio test despite neither reading meaning anything. TODO: bench
+// calibrate against this pack's actual nominal/minimum real voltage once HV is connected —
+// this placeholder just needs to sit well above floating-input noise and well below any
+// real pack voltage.
+#define IVT_MIN_VALID_VOLTAGE_MV 50000 // 50V — TODO: bench calibrate
 extern uint16_t throttlePot1Raw;      // ADS1115 AIN0 count, track 1 (updated in loop())
 extern uint16_t throttlePot2Raw;      // ADS1115 AIN1 count, track 2 (updated in loop())
 extern int16_t  brakeRaw;             // ADS1115 AIN2 count (updated in loop())

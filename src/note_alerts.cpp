@@ -39,6 +39,30 @@ static const char *alertMessage(uint8_t code) {
   }
 }
 
+// No direct serial adapter to the Notecard itself, so this is the only visibility into
+// whether it's actually connected/syncing over cellular — hub.set/note.add succeeding just
+// means the local I2C request was accepted, not that anything reached Notehub. Rate-limited
+// internally; call from loop() (NOT an ISR context — this is a request/response I2C
+// transaction and may take a while, same reasoning as why SD/Ethernet I/O only happens
+// from loop() elsewhere in this project).
+void notecardCheckStatus() {
+  static uint32_t lastCheck = 0;
+  if (millis() - lastCheck < 60000) return; // at most once/minute
+  lastCheck = millis();
+
+  J *rsp = notecard.requestAndResponse(notecard.newRequest("hub.status"));
+  if (rsp == NULL) {
+    Serial.println("Notecard hub.status: no response");
+    return;
+  }
+  // Full JSON already printed via the debug output stream set in notecardInit() — this is
+  // just a quick human-readable summary on top of that.
+  Serial.printf("Notecard hub.status summary: connected=%s status=\"%s\"\n",
+                JGetBool(rsp, "connected") ? "yes" : "no",
+                JGetString(rsp, "status"));
+  notecard.deleteResponse(rsp);
+}
+
 void notecardSendAlert(uint8_t code) {
   J *req = notecard.newRequest("note.add");
   JAddStringToObject(req, "file", "alerts.qo"); // Blues convention: ".qo" = outbound queue

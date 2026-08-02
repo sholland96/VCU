@@ -14,6 +14,7 @@
 #include "callbacks.h"
 #include "realdash_tcp.h"
 #include "odroid_shutdown.h"
+#include "note_alerts.h"
 
 using namespace TeensyTimerTool;
 IntervalTimer  t0;       // PIT channel — 10ms LDU torque command (highest priority)
@@ -251,6 +252,7 @@ void loop() {
 
   realdashService(); // accept/replace the RealDash TCP client (Odroid dashboard)
   odroidShutdownService(); // accept the Odroid-side shutdown-watcher TCP client
+  notecardCheckStatus(); // rate-limited to 1/min internally — see note_alerts.h
 
 
 fsm.run_machine();

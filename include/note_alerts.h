@@ -13,3 +13,8 @@
 
 void notecardInit();          // call once from setup() — I2C begin() + hub.set with product UID
 void notecardSendAlert(uint8_t code); // mirrors the old 0xC79 SMS message codes
+
+// Requests hub.status and logs the raw JSON response over Serial — the only visibility
+// into whether the Notecard is actually connected/syncing when there's no direct serial
+// adapter to talk to it. Internally rate-limited; safe to call every callback_t3() tick.
+void notecardCheckStatus();

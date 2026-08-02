@@ -187,7 +187,11 @@ void PreCharge_exit() {
 }
 
 void check_PreCharge() {
-  if (IVTpackVoltage > 0 &&
+  // IVTpackVoltage > 0 alone isn't enough — a floating/disconnected U1 can still read a
+  // small positive stray value, and a similarly-floating U2 can satisfy the 95% ratio
+  // check against it despite neither reading being real (confirmed on hardware bench
+  // testing with no HV connected). Require a realistic minimum pack voltage first.
+  if (IVTpackVoltage >= IVT_MIN_VALID_VOLTAGE_MV &&
       IVTpreChargeV >= (IVTpackVoltage * 95 / 100)) {
     PDUmsg1.buf[3] = 0x0D; // CH4 5A — positive contactor on
     sdLogEvent("PRECHARGE_OK");
