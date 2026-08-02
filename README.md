@@ -530,6 +530,12 @@ VCU retries the signal at most once/second until a client is actually connected 
 miss if the watcher happens to be mid-reconnect). Once delivered, the VCU waits
 `ODROID_SHUTDOWN_DELAY_MS` (10 s — measured on hardware: Linux networking goes down ~6 s after the
 signal, 10 s keeps some margin above that) before actually cutting `RELAY_ODROID_PIN`.
+`ODROID_SHUTDOWN_MAX_WAIT_MS` (30 s, measured from `klrLowSince`) is a hard ceiling on the whole
+sequence — if the Odroid is off, unreachable, or its watcher isn't running, the signal can never
+succeed and the relay would otherwise never go LOW, which would block `enterSleep()` forever
+(confirmed on hardware). Past this ceiling the VCU gives up trying to signal gracefully and cuts
+the relay anyway, so its own ability to sleep is never permanently hostage to a peripheral being
+unavailable.
 
 On the Odroid side, `odroid/odroid_shutdown_watcher.py` (deployed as a systemd service) connects
 to the VCU's port 35001 and waits for a single byte. On receipt, it:
