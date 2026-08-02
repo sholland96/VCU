@@ -203,6 +203,13 @@ void callback_t2() {
                   packV10, highestCellV, lowestCellV, (uint8_t)VCUstate);
   }
 
+  // All of this is pointless once Relay #1 (PDU-8/IVT-S/SIM100MOD/keypad) has cut power —
+  // pMBB32 modules are fed through PDU-8's own CH2 output, so without PDU-8 powered they
+  // can never respond no matter what's sent here. Confirmed on hardware: with no guard,
+  // this spun the shutdown->wake->PDU-CH2-power-cycle recovery forever, uselessly, the
+  // instant KL15R dropped and Relay #1 cut power — harmless noise, but wasteful CAN/CPU
+  // activity with no chance of ever succeeding.
+  if (digitalRead(RELAY_PDU_PIN)) {
   // request all cell and temperature measurements every t2 period
   msg1.id = 0xFF0000;
   msg1.flags.extended = 1;
@@ -372,6 +379,7 @@ void callback_t2() {
     }
     if (anyWoke) { msg1.id = 0xFF0000; msg1.len = 0; can1.write(msg1); }
   }
+  } // end RELAY_PDU_PIN guard
 
   sdLogPending = true; // data row written in loop() — SD writes must not happen in ISR
   msg2.id = 0xA100101;//send SIM100MOD Request Isolation State command
